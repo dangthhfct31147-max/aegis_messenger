@@ -323,6 +323,85 @@ fn enable_hardware_unlock(label: String, state: State<AppState>) -> Result<Devic
 }
 
 #[tauri::command]
+fn list_devices(state: State<AppState>) -> Result<Vec<DeviceInfo>, String> {
+    let vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault.list_devices().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn create_device_link_bundle(
+    target_device_id: String,
+    link_secret: String,
+    state: State<'_, AppState>,
+) -> Result<aegis_protocol::DeviceLinkBundle, String> {
+    let client = transport_client_for_state(&state)?;
+    let (account_id, encrypted_payload) = {
+        let vault = state.vault.lock().map_err(|e| e.to_string())?;
+        let account_id = vault
+            .account_id()
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| base64_url_encode(&[0u8; 32]));
+        let payload = vault
+            .create_device_sync_bundle(target_device_id.clone(), &link_secret)
+            .map_err(|e| e.to_string())?;
+        (account_id, payload)
+    };
+    client
+        .submit_device_link_bundle(&aegis_protocol::SubmitDeviceLinkBundle {
+            account_id,
+            target_device_id,
+            encrypted_payload,
+            ttl_seconds: Some(600),
+        })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn import_device_link_bundle(
+    bundle_id: String,
+    link_secret: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<DeviceInfo>, String> {
+    let client = transport_client_for_state(&state)?;
+    let bundle = client
+        .get_device_link_bundle(&bundle_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault
+        .import_device_sync_bundle(&bundle.encrypted_payload, &link_secret)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn revoke_device(device_id: String, state: State<AppState>) -> Result<Vec<DeviceInfo>, String> {
+    let vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault.revoke_device(device_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_traffic_privacy_profile(
+    mode: String,
+    state: State<AppState>,
+) -> Result<aegis_protocol::mls::TrafficProfile, String> {
+    let mode = match mode.as_str() {
+        "direct" => aegis_protocol::mls::TrafficProfileMode::Direct,
+        "padded" => aegis_protocol::mls::TrafficProfileMode::Padded,
+        "high_privacy" => aegis_protocol::mls::TrafficProfileMode::HighPrivacy,
+        _ => return Err("unknown traffic profile".into()),
+    };
+    let profile = aegis_protocol::mls::TrafficProfile {
+        mode,
+        ..Default::default()
+    };
+    let vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault
+        .set_traffic_profile(profile)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn create_group(
     name: String,
     member_contact_ids: Vec<String>,
@@ -358,7 +437,7 @@ async fn send_group_message(
         let (contact, wire_bytes, mut message) = {
             let vault = state.vault.lock().map_err(|e| e.to_string())?;
             vault
-                .encrypt_outbound_message(&member.id, &format!("[group:{group_id}] {text}"))
+                .encrypt_outbound_message(&member.id, &text)
                 .map_err(|e| e.to_string())?
         };
         let envelope = client
@@ -463,6 +542,11 @@ pub fn run() {
             set_transport_proxy,
             get_identity_display,
             enable_hardware_unlock,
+            list_devices,
+            create_device_link_bundle,
+            import_device_link_bundle,
+            revoke_device,
+            set_traffic_privacy_profile,
             create_group,
             list_groups,
             send_group_message,

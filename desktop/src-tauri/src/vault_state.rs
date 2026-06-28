@@ -18,7 +18,10 @@ const PROFILE_RECORD_ID: &str = "local-profile";
 const CONTACTS_RECORD_ID: &str = "contacts";
 const MESSAGES_RECORD_ID: &str = "messages";
 const GROUPS_RECORD_ID: &str = "groups";
+const DEVICES_RECORD_ID: &str = "devices";
+const MLS_GROUPS_RECORD_ID: &str = "mls-groups";
 const SETTINGS_RECORD_ID: &str = "settings";
+const TRAFFIC_PROFILE_RECORD_ID: &str = "traffic-profile";
 
 pub struct AppVault {
     vault: aegis_vault::AegisVault,
@@ -91,6 +94,43 @@ pub struct GroupRecord {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceState {
+    pub device_id: String,
+    pub display_name: String,
+    pub key_version: u32,
+    pub revoked: bool,
+    pub linked_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceSyncBundle {
+    pub version: u16,
+    pub source_device_id: String,
+    pub target_device_id: String,
+    pub contacts: Vec<ContactRecord>,
+    pub groups: Vec<GroupRecord>,
+    pub mls_groups: Vec<MlsGroupState>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MlsGroupState {
+    pub group_id: String,
+    pub name: String,
+    pub epoch: u64,
+    pub member_contact_ids: Vec<String>,
+    pub backend: String,
+    pub serialized_group_state: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+pub struct MlsKeyPackageStore {
+    pub packages: Vec<aegis_protocol::mls::MlsKeyPackage>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TransportSettings {
     pub proxy_mode: ProxyMode,
     pub proxy_url: Option<String>,
@@ -145,6 +185,16 @@ struct MessageList {
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct GroupList {
     groups: Vec<GroupRecord>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct DeviceList {
+    devices: Vec<DeviceState>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct MlsGroupList {
+    groups: Vec<MlsGroupState>,
 }
 
 impl Default for AppVault {
@@ -469,6 +519,10 @@ impl AppVault {
         Ok((profile.queue_id, profile.read_token, profile.write_token))
     }
 
+    pub fn account_id(&self) -> Result<Option<String>, aegis_vault::VaultError> {
+        Ok(self.require_profile()?.account_id)
+    }
+
     pub fn verify_contact(&self, contact_id: &str) -> Result<ContactInfo, aegis_vault::VaultError> {
         let mut contacts = self.load_contacts()?;
         let contact = contacts
@@ -530,6 +584,129 @@ impl AppVault {
         })
     }
 
+    pub fn list_devices(&self) -> Result<Vec<DeviceInfo>, aegis_vault::VaultError> {
+        let profile = self.require_profile()?;
+        let mut devices = self.load_devices()?.devices;
+        if !devices.iter().any(|device| {
+            profile
+                .device_id
+                .as_ref()
+                .map(|id| id == &device.device_id)
+                .unwrap_or(false)
+        }) {
+            devices.push(DeviceState {
+                device_id: profile.device_id.unwrap_or_else(|| "local".into()),
+                display_name: profile.display_name,
+                key_version: profile.key_version,
+                revoked: false,
+                linked_at: chrono::Utc::now().timestamp(),
+            });
+        }
+        Ok(devices
+            .into_iter()
+            .map(|device| DeviceInfo {
+                device_id: device.device_id,
+                display_name: device.display_name,
+                revoked: device.revoked,
+            })
+            .collect())
+    }
+
+    pub fn create_device_sync_bundle(
+        &self,
+        target_device_id: String,
+        link_secret: &str,
+    ) -> Result<String, aegis_vault::VaultError> {
+        let profile = self.require_profile()?;
+        let source_device_id = profile.device_id.unwrap_or_else(|| "local".into());
+        let bundle = DeviceSyncBundle {
+            version: 1,
+            source_device_id: source_device_id.clone(),
+            target_device_id: target_device_id.clone(),
+            contacts: self.load_contacts()?.contacts,
+            groups: self.load_groups()?.groups,
+            mls_groups: self.load_mls_groups()?.groups,
+            created_at: chrono::Utc::now().timestamp(),
+        };
+        let bytes = serde_json::to_vec(&bundle)
+            .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+        let link_key = derive_device_link_key(link_secret, &target_device_id);
+        let encrypted = aead::encrypt(&link_key, &bytes, target_device_id.as_bytes())
+            .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+        Ok(base64_url_encode(&encrypted))
+    }
+
+    pub fn import_device_sync_bundle(
+        &self,
+        encrypted_payload: &str,
+        link_secret: &str,
+    ) -> Result<Vec<DeviceInfo>, aegis_vault::VaultError> {
+        let bytes = base64_url_decode(encrypted_payload)
+            .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+        let profile = self.require_profile()?;
+        let target_device_id = profile.device_id.unwrap_or_else(|| "local".into());
+        let link_key = derive_device_link_key(link_secret, &target_device_id);
+        let plaintext =
+            aead::decrypt(&link_key, &bytes, target_device_id.as_bytes()).map_err(|_| {
+                aegis_vault::VaultError::Record("invalid device-link secret or payload".into())
+            })?;
+        let bundle: DeviceSyncBundle = serde_json::from_slice(&plaintext)
+            .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+
+        self.save_contacts(&ContactList {
+            contacts: bundle.contacts,
+        })?;
+        self.save_groups(&GroupList {
+            groups: bundle.groups,
+        })?;
+        self.save_mls_groups(&MlsGroupList {
+            groups: bundle.mls_groups,
+        })?;
+
+        let mut devices = self.load_devices()?;
+        if !devices
+            .devices
+            .iter()
+            .any(|device| device.device_id == bundle.source_device_id)
+        {
+            devices.devices.push(DeviceState {
+                device_id: bundle.source_device_id,
+                display_name: "Linked device".into(),
+                key_version: 1,
+                revoked: false,
+                linked_at: chrono::Utc::now().timestamp(),
+            });
+        }
+        self.save_devices(&devices)?;
+        self.list_devices()
+    }
+
+    pub fn revoke_device(
+        &self,
+        device_id: String,
+    ) -> Result<Vec<DeviceInfo>, aegis_vault::VaultError> {
+        let mut devices = self.load_devices()?;
+        for device in &mut devices.devices {
+            if device.device_id == device_id {
+                device.revoked = true;
+            }
+        }
+        self.save_devices(&devices)?;
+        self.list_devices()
+    }
+
+    pub fn set_traffic_profile(
+        &self,
+        profile: aegis_protocol::mls::TrafficProfile,
+    ) -> Result<aegis_protocol::mls::TrafficProfile, aegis_vault::VaultError> {
+        self.save_json(
+            aegis_vault::vault::RecordType::Settings,
+            TRAFFIC_PROFILE_RECORD_ID,
+            &profile,
+        )?;
+        Ok(profile)
+    }
+
     pub fn create_group(
         &self,
         name: String,
@@ -553,9 +730,21 @@ impl AppVault {
             member_contact_ids,
             created_at: chrono::Utc::now().timestamp(),
         };
+        let mls_group = MlsGroupState {
+            group_id: group.id.clone(),
+            name: group.name.clone(),
+            epoch: 0,
+            member_contact_ids: group.member_contact_ids.clone(),
+            backend: aegis_protocol::mls::MLS_BACKEND.into(),
+            serialized_group_state: base64_url_encode(&[]),
+            created_at: group.created_at,
+        };
         let mut groups = self.load_groups()?;
         groups.groups.push(group.clone());
         self.save_groups(&groups)?;
+        let mut mls_groups = self.load_mls_groups()?;
+        mls_groups.groups.push(mls_group);
+        self.save_mls_groups(&mls_groups)?;
         Ok(to_group_info(group))
     }
 
@@ -659,6 +848,32 @@ impl AppVault {
         )
     }
 
+    fn load_devices(&self) -> Result<DeviceList, aegis_vault::VaultError> {
+        self.load_json(aegis_vault::vault::RecordType::Settings, DEVICES_RECORD_ID)
+            .or_else(|_| Ok(DeviceList::default()))
+    }
+
+    fn save_devices(&self, devices: &DeviceList) -> Result<(), aegis_vault::VaultError> {
+        self.save_json(
+            aegis_vault::vault::RecordType::Settings,
+            DEVICES_RECORD_ID,
+            devices,
+        )
+    }
+
+    fn load_mls_groups(&self) -> Result<MlsGroupList, aegis_vault::VaultError> {
+        self.load_json(aegis_vault::vault::RecordType::Group, MLS_GROUPS_RECORD_ID)
+            .or_else(|_| Ok(MlsGroupList::default()))
+    }
+
+    fn save_mls_groups(&self, groups: &MlsGroupList) -> Result<(), aegis_vault::VaultError> {
+        self.save_json(
+            aegis_vault::vault::RecordType::Group,
+            MLS_GROUPS_RECORD_ID,
+            groups,
+        )
+    }
+
     fn load_json<T: serde::de::DeserializeOwned>(
         &self,
         record_type: aegis_vault::vault::RecordType,
@@ -697,6 +912,17 @@ fn derive_contact_secret(
     let mut key = [0u8; 32];
     key.copy_from_slice(&out[..32]);
     Ok(SymmetricKey(key))
+}
+
+fn derive_device_link_key(link_secret: &str, target_device_id: &str) -> SymmetricKey {
+    let mut hasher = Sha512::new();
+    hasher.update(b"aegis-device-link-v1");
+    hasher.update(link_secret.as_bytes());
+    hasher.update(target_device_id.as_bytes());
+    let out = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&out[..32]);
+    SymmetricKey(key)
 }
 
 fn encode_padded_wire(wire: WireMessage) -> Result<Vec<u8>, aegis_vault::VaultError> {

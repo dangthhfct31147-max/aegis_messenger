@@ -9,13 +9,13 @@ Built for the Raspberry Pi as your personal relay server. Works on Linux, macOS,
 | Property | Status | Implementation |
 |---|---|
 | End-to-end message encryption | Partial | Desktop invite/import/send/poll flow encrypts paired 1:1 messages before relay upload |
-| Post-quantum KEM | Partial | ML-KEM-768 is integrated behind a provider trait; downgrade handling and external review are required before production claims |
+| Post-quantum KEM | Partial | ML-KEM-768 is integrated behind a provider trait with fail-closed downgrade policy hooks; external review is required before production claims |
 | Forward secrecy | Partial | Double Ratchet session state has per-message keys, replay rejection, and skipped-key handling |
 | Key derivation | Implemented | HKDF-SHA512 + Argon2id |
 | Digital signatures | Implemented | Ed25519 |
 | Server trust model | Implemented for relay contents | Relay accepts only public key material and ciphertext envelopes |
-| Metadata minimization | Partial | Hashed queue IDs and TTL envelopes; traffic correlation remains out of scope for MVP |
-| Local storage | Implemented for vault records | Encrypted local vault; full chat history schema still pending |
+| Metadata minimization | Partial | Hashed queue IDs, TTL envelopes, fixed buckets, and dummy envelopes through the normal envelope endpoint; global traffic correlation remains out of scope |
+| Local storage | Implemented for vault records | Encrypted local vault with staged device/MLS/traffic-profile records; full chat history schema still pending |
 | Hardware key support | Partial | Desktop can record hardware-unlock enrollment intent; FIDO2 PRF unlock is not implemented yet |
 
 See [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md) for full details.
@@ -99,9 +99,11 @@ cd desktop && npm install && npm run tauri build
 # Desktop app
 ./target/release/aegis-desktop
 
-# Relay server (on Pi, default port 8080)
-AEGIS_BIND=0.0.0.0:8080 ./target/release/aegis-server
+# Relay server (local development, default port 8080)
+AEGIS_BIND=127.0.0.1:8080 ./target/release/aegis-server
 ```
+
+Public plaintext HTTP binds are refused by default. For Raspberry Pi/public relay deployments, run Aegis behind a TLS 1.3 reverse proxy, or set `AEGIS_ALLOW_INSECURE_PUBLIC_HTTP=1` only for explicit lab-only testing.
 
 ## Cryptographic Crates
 
@@ -117,6 +119,7 @@ AEGIS_BIND=0.0.0.0:8080 ./target/release/aegis-server
 - PQXDH-inspired initial handshake (hybrid X25519 + ML-KEM-768 when recipient publishes a PQ prekey)
 - Double Ratchet session with symmetric initialization
 - Envelope serialization with metadata minimization
+- MLS/OpenMLS-facing group state facade, claim gates, and traffic profile types
 - Safety numbers for contact verification
 
 ### aegis-vault
@@ -129,12 +132,13 @@ AEGIS_BIND=0.0.0.0:8080 ./target/release/aegis-server
 - Minimal server API client
 - Account/queue/envelope management
 - Optional proxy routing for Tor SOCKS or I2P HTTP proxy mode
-- Cover-traffic endpoint support for padded dummy traffic
+- Dummy traffic support through the same encrypted envelope endpoint used for real traffic
 - Constant-time token comparison
 
 ### aegis-server
 - TTL persistent JSON store by default; strict in-memory mode is available with `AEGIS_RELAY_MODE=strict_ephemeral`
 - Ephemeral relay: queues/envelopes auto-expire
+- Device key package, transparency log, and encrypted device-link bundle endpoints
 - Token capability system (read/write separation)
 - Rate limiting ready
 
@@ -195,11 +199,11 @@ cargo fmt --all
 ## Limitations
 
 This is an MVP. Known limitations:
-- Group messaging is available only as per-recipient E2EE fanout; no RFC 9420 MLS ratchet tree yet
-- Multi-device uses per-device public registration foundations, but encrypted device-link/key-transfer UX is not complete
-- No perfect forward secrecy for the relay server itself
-- ML-KEM-768 is integrated and desktop contact import rejects invalid PQ prekeys, but production review is still required
-- Tor/I2P proxy routing, envelope padding, and cover traffic are available, but global traffic-correlation protection is not complete
+- Group messaging now has an MLS/OpenMLS-facing protocol facade and vault state, but desktop delivery still needs the OpenMLS backend wired before RFC 9420 claims are enabled
+- Multi-device has device key package, transparency log, and encrypted device-link bundle foundations; full approval UX and conflict handling are still pending
+- Relay transport/session PFS can only be claimed for TLS 1.3 strict-ephemeral deployments; TTL persistent mode remains an availability mode
+- ML-KEM-768 is integrated and malformed inputs fail closed, but production review is still required
+- Tor/I2P proxy routing, envelope padding, and dummy envelopes are available, but global traffic-correlation protection is not complete
 
 See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for full list.
 

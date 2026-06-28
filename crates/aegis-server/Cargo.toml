@@ -28,3 +28,4 @@ http = "1"
 chrono = { version = "0.4", features = ["serde"] }
 subtle = "2.5"
 aegis-crypto = { path = "../aegis-crypto" }
+aegis-protocol = { path = "../aegis-protocol" }

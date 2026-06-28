@@ -242,9 +242,11 @@ Envelope {
 
 ---
 
-## 8. Group Messaging (MLS-Inspired)
+## 8. Group Messaging (MLS / OpenMLS Staged)
 
-Current desktop group messaging is implemented as per-recipient encrypted fanout over existing 1:1 contact secrets. This is an MVP compatibility layer, not an RFC 9420 MLS implementation.
+Current desktop group messaging delivery is still per-recipient fanout over existing 1:1 contact secrets. The protocol crate now exposes an MLS/OpenMLS-facing facade (`AegisMlsGroup`, `MlsKeyPackage`, `MlsWelcome`, `MlsCommit`, `MlsApplicationMessage`, and `MlsEpochState`) so the desktop/server contracts can move to RFC 9420 semantics without exposing OpenMLS internals across the app.
+
+The production claim gate remains blocked until OpenMLS-backed group state is wired end-to-end and tested for add/remove/update commits, epoch mismatch rejection, removed-member decrypt failure, and interop.
 
 ### 8.1 Group Model
 
@@ -286,7 +288,7 @@ pq_secret         = ML-KEM-768.Encaps(pq_sp_B).shared_secret
 shared_secret     = SHA-512(classical_secret || pq_secret)
 ```
 
-If ML-KEM-768 is unavailable on a platform, we fall back to X25519-only with a clear security downgrade warning to the user.
+If ML-KEM-768 is unavailable on a platform, production paths must call the fail-closed downgrade policy and reject the handshake. Explicit lab/demo downgrade can still be allowed by policy, but it must not silently produce a production-grade post-quantum claim.
 
 ### 9.2 Post-Quantum Signatures (Experimental)
 

@@ -261,20 +261,29 @@ impl TransportClient {
 
     pub async fn send_cover_traffic(
         &self,
+        queue_id: &str,
+        write_token: &str,
         padded_size_bucket: i32,
     ) -> Result<(), crate::error::TransportError> {
         #[derive(serde::Serialize)]
-        struct Body {
-            padding: String,
+        struct Body<'a> {
+            queue_id_hash: &'a str,
+            ciphertext_blob: String,
             padded_size_bucket: i32,
+            ttl_seconds: Option<i64>,
+            dummy: bool,
         }
         let body = Body {
-            padding: base64_url_encode(&vec![0u8; padded_size_bucket.max(0) as usize]),
+            queue_id_hash: queue_id,
+            ciphertext_blob: base64_url_encode(&vec![0u8; padded_size_bucket.max(0) as usize]),
             padded_size_bucket,
+            ttl_seconds: None,
+            dummy: true,
         };
         let resp = self
             .client
-            .post(format!("{}/v1/cover", self.server_url))
+            .post(format!("{}/v1/envelopes", self.server_url))
+            .bearer_auth(write_token)
             .json(&body)
             .send()
             .await
@@ -286,6 +295,150 @@ impl TransportClient {
             )));
         }
         Ok(())
+    }
+
+    pub async fn publish_device_key_package(
+        &self,
+        body: &aegis_protocol::PublishDeviceKeyPackage,
+    ) -> Result<aegis_protocol::DeviceKeyPackage, crate::error::TransportError> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/device-key-packages", self.server_url))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
+    }
+
+    pub async fn get_device_key_package(
+        &self,
+        device_id: &str,
+    ) -> Result<aegis_protocol::DeviceKeyPackage, crate::error::TransportError> {
+        let resp = self
+            .client
+            .get(format!(
+                "{}/v1/device-key-packages/{}",
+                self.server_url, device_id
+            ))
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
+    }
+
+    pub async fn append_transparency_log_event(
+        &self,
+        body: &aegis_protocol::AppendTransparencyLogEvent,
+    ) -> Result<aegis_protocol::TransparencyLogEvent, crate::error::TransportError> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/transparency-log", self.server_url))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
+    }
+
+    pub async fn list_transparency_log_events(
+        &self,
+        account_id: &str,
+    ) -> Result<Vec<aegis_protocol::TransparencyLogEvent>, crate::error::TransportError> {
+        #[derive(Deserialize)]
+        struct Response {
+            events: Vec<aegis_protocol::TransparencyLogEvent>,
+        }
+        let resp = self
+            .client
+            .get(format!(
+                "{}/v1/transparency-log?account_id={}",
+                self.server_url, account_id
+            ))
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        let data: Response = resp
+            .json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))?;
+        Ok(data.events)
+    }
+
+    pub async fn submit_device_link_bundle(
+        &self,
+        body: &aegis_protocol::SubmitDeviceLinkBundle,
+    ) -> Result<aegis_protocol::DeviceLinkBundle, crate::error::TransportError> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/device-link-bundles", self.server_url))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
+    }
+
+    pub async fn get_device_link_bundle(
+        &self,
+        bundle_id: &str,
+    ) -> Result<aegis_protocol::DeviceLinkBundle, crate::error::TransportError> {
+        let resp = self
+            .client
+            .get(format!(
+                "{}/v1/device-link-bundles/{}",
+                self.server_url, bundle_id
+            ))
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
     }
 }
 

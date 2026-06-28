@@ -19,6 +19,8 @@ pub struct Envelope {
     pub created_at_bucket: String,
     pub expires_at: DateTime<Utc>,
     pub delivery_state: String,
+    #[serde(default)]
+    pub is_dummy: bool,
 }
 
 /// In-memory queue storage
@@ -46,6 +48,38 @@ pub struct Device {
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceKeyPackage {
+    pub account_id: [u8; 32],
+    pub device_id: [u8; 32],
+    pub mls_key_package: Vec<u8>,
+    pub device_list_signature: Vec<u8>,
+    pub key_version: i32,
+    pub created_at_bucket: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransparencyLogEvent {
+    pub event_id: [u8; 32],
+    pub account_id: [u8; 32],
+    pub device_id: [u8; 32],
+    pub event_type: String,
+    pub event_hash: Vec<u8>,
+    pub prev_hash: Vec<u8>,
+    pub signature: Vec<u8>,
+    pub created_at_bucket: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLinkBundle {
+    pub bundle_id: [u8; 32],
+    pub account_id: [u8; 32],
+    pub target_device_id: [u8; 32],
+    pub encrypted_payload: Vec<u8>,
+    pub created_at_bucket: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// In-memory account
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
@@ -62,6 +96,9 @@ pub struct ServerState {
     pub envelopes: RwLock<HashMap<[u8; 32], Envelope>>,
     /// envelopes indexed by queue_id_hash → list of envelope IDs
     pub queue_envelopes: RwLock<HashMap<[u8; 32], Vec<[u8; 32]>>>,
+    pub device_key_packages: RwLock<HashMap<[u8; 32], DeviceKeyPackage>>,
+    pub transparency_log: RwLock<Vec<TransparencyLogEvent>>,
+    pub device_link_bundles: RwLock<HashMap<[u8; 32], DeviceLinkBundle>>,
     pub relay_mode: RelayMode,
     pub persistence_path: Option<PathBuf>,
 }
@@ -73,6 +110,9 @@ pub struct PersistedRelayState {
     pub queues: Vec<Queue>,
     pub envelopes: Vec<Envelope>,
     pub queue_envelopes: Vec<([u8; 32], Vec<[u8; 32]>)>,
+    pub device_key_packages: Vec<DeviceKeyPackage>,
+    pub transparency_log: Vec<TransparencyLogEvent>,
+    pub device_link_bundles: Vec<DeviceLinkBundle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +131,9 @@ impl Default for ServerState {
             queues: RwLock::new(HashMap::new()),
             envelopes: RwLock::new(HashMap::new()),
             queue_envelopes: RwLock::new(HashMap::new()),
+            device_key_packages: RwLock::new(HashMap::new()),
+            transparency_log: RwLock::new(Vec::new()),
+            device_link_bundles: RwLock::new(HashMap::new()),
             relay_mode: RelayMode::StrictEphemeral,
             persistence_path: None,
         }
@@ -140,6 +183,21 @@ impl ServerState {
                     .collect(),
             ),
             queue_envelopes: RwLock::new(persisted.queue_envelopes.into_iter().collect()),
+            device_key_packages: RwLock::new(
+                persisted
+                    .device_key_packages
+                    .into_iter()
+                    .map(|package| (package.device_id, package))
+                    .collect(),
+            ),
+            transparency_log: RwLock::new(persisted.transparency_log),
+            device_link_bundles: RwLock::new(
+                persisted
+                    .device_link_bundles
+                    .into_iter()
+                    .map(|bundle| (bundle.bundle_id, bundle))
+                    .collect(),
+            ),
             relay_mode,
             persistence_path: Some(persistence_path),
         }
@@ -187,6 +245,25 @@ impl ServerState {
                 .map_err(|e| e.to_string())?
                 .iter()
                 .map(|(queue_id_hash, envelopes)| (*queue_id_hash, envelopes.clone()))
+                .collect(),
+            device_key_packages: self
+                .device_key_packages
+                .read()
+                .map_err(|e| e.to_string())?
+                .values()
+                .cloned()
+                .collect(),
+            transparency_log: self
+                .transparency_log
+                .read()
+                .map_err(|e| e.to_string())?
+                .clone(),
+            device_link_bundles: self
+                .device_link_bundles
+                .read()
+                .map_err(|e| e.to_string())?
+                .values()
+                .cloned()
                 .collect(),
         };
         let bytes = serde_json::to_vec_pretty(&persisted).map_err(|e| e.to_string())?;

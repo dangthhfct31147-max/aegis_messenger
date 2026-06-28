@@ -133,6 +133,32 @@ transparency_log
 - Append-only. No deletes or updates.
 - Used for key transparency: clients can detect unexpected device additions.
 
+### 2.7 `device_key_packages`
+
+```
+device_key_packages
+  device_id_random        BYTEA(32) PRIMARY KEY
+  account_id_random       BYTEA(32) NOT NULL
+  mls_key_package         BYTEA     NOT NULL  -- public OpenMLS key package material
+  device_list_signature   BYTEA(64) NOT NULL
+  key_version             INT       NOT NULL
+  created_at_bucket       TIMESTAMPTZ
+```
+
+### 2.8 `device_link_bundles`
+
+```
+device_link_bundles
+  bundle_id_random        BYTEA(32) PRIMARY KEY
+  account_id_random       BYTEA(32) NOT NULL
+  target_device_id_random BYTEA(32) NOT NULL
+  encrypted_payload       BYTEA     NOT NULL  -- E2E encrypted private-state transfer bundle
+  created_at_bucket       TIMESTAMPTZ
+  expires_at              TIMESTAMPTZ NOT NULL
+```
+
+Private keys, contact plaintext, message plaintext, and decrypted device state remain forbidden on the relay.
+
 ---
 
 ## 3. What the Server MUST NOT Have
@@ -304,6 +330,46 @@ Response: {
   signature: b64
 }
 ```
+
+### Device Key Package Publish/Fetch
+
+```
+POST /v1/device-key-packages
+Body: {
+  account_id: b64,
+  device_id: b64,
+  mls_key_package: b64,
+  device_list_signature: b64,
+  key_version: int
+}
+
+GET /v1/device-key-packages/{device_id}
+Response: { account_id, device_id, mls_key_package, device_list_signature, key_version, created_at_bucket }
+```
+
+### Transparency Log
+
+```
+POST /v1/transparency-log
+Body: { account_id, device_id, event_type, event_hash, prev_hash, signature }
+
+GET /v1/transparency-log?account_id={account_id}
+Response: { events: [...] }
+```
+
+### Encrypted Device-Link Bundle
+
+```
+POST /v1/device-link-bundles
+Body: { account_id, target_device_id, encrypted_payload, ttl_seconds? }
+
+GET /v1/device-link-bundles/{bundle_id}
+Response: { bundle_id, account_id, target_device_id, encrypted_payload, expires_at, created_at_bucket }
+```
+
+### Dummy Traffic
+
+Dummy traffic MUST use `POST /v1/envelopes` with ciphertext-shaped padded blobs and `dummy=true`. The old `/v1/cover` endpoint is deprecated because a separate endpoint makes dummy traffic distinguishable from real envelope traffic.
 
 ### One-Time Prekey Upload
 

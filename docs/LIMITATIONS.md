@@ -83,7 +83,7 @@ Argon2id parameters (`m`, `t`, `p`) must be calibrated to the target device. Hig
 
 The RustCrypto `ml-kem` crate is integrated behind the Aegis `KemProvider` abstraction. NIST standardized ML-KEM in 2024, and the Rust ecosystem is still maturing.
 
-**Mitigation:** Aegis can swap the provider without protocol-wide rewrites. Desktop contact import validates that an invite contains an encapsulatable ML-KEM-768 prekey and fails closed if it does not. Production builds still require external review, stable test vectors, and downgrade UX for non-desktop protocol paths.
+**Mitigation:** Aegis can swap the provider without protocol-wide rewrites. Desktop contact import validates that an invite contains an encapsulatable ML-KEM-768 prekey and fails closed if it does not. The crypto crate now has ML-KEM size/KAT-style checks, malformed ciphertext rejection, and a fail-closed downgrade policy hook. Production builds still require external review, stable external test-vector coverage, and transcript-binding review before production claims.
 
 ### 2.3 FIDO2 hmac-secret Extension Availability
 
@@ -93,15 +93,15 @@ Not all browsers and hardware keys support the FIDO2 hmac-secret extension (CTAP
 
 ### 2.4 Multi-Device Key Distribution
 
-The relay has device registration/prekey foundations, but the desktop client does not yet implement encrypted device-link approval or private state transfer between a user's devices.
+The relay has device registration/prekey foundations plus device key package, transparency log, and encrypted device-link bundle endpoints. The desktop vault has staged device sync records and commands, but the full approval UX, conflict handling, and audited private-state transfer flow are not complete.
 
-**Limitation:** Aegis should not sync private keys through the relay in plaintext or via server escrow. A future device-link flow must transfer device state encrypted end-to-end from an approved existing device. Users who lose all enrolled devices and all recovery phrases are permanently locked out, by design.
+**Limitation:** Aegis should not sync private keys through the relay in plaintext or via server escrow. Device-link payloads must remain encrypted end-to-end from an approved existing device. Users who lose all enrolled devices and all recovery phrases are permanently locked out, by design.
 
 ### 2.5 Group Messaging Scope
 
-Desktop MVP group messaging uses per-recipient E2EE fanout over each member's 1:1 contact secret. The sender uploads one encrypted envelope per member.
+Desktop MVP group messaging still delivers one encrypted envelope per member. Aegis now has an MLS/OpenMLS-facing protocol facade and vault state for group epochs/key packages/commits, but the desktop send/receive path is not yet backed by OpenMLS application messages.
 
-**Limitation:** This is not RFC 9420 MLS. It does not provide MLS tree-based group forward secrecy, efficient membership changes, or cryptographic group state commits. Large groups and advanced group admin controls remain out of scope until an audited MLS implementation is integrated.
+**Limitation:** This is not yet a production RFC 9420 MLS implementation. The MLS claim gate must stay blocked until OpenMLS-backed group state, membership commits, removed-member decrypt failure, and interop tests are wired through the desktop flow.
 
 ### 2.6 Offline Message Delivery Modes
 
@@ -126,8 +126,8 @@ The following features are planned for post-MVP releases and are explicitly out 
 | Read receipts (server-visible) | Metadata; privacy degradation |
 | Typing indicators (server-visible) | Metadata; privacy degradation |
 | "Last seen" / online status | Metadata; privacy degradation |
-| MLS group ratchet tree | Current desktop group messaging is per-recipient fanout, not RFC 9420 MLS |
-| Contact transfer between devices | Requires secure offline transfer protocol |
+| MLS group ratchet tree | Protocol/vault facade exists; desktop flow is not yet OpenMLS-backed |
+| Contact transfer between devices | Device-link bundle foundations exist; approval UX and conflict handling are pending |
 | Key escrow / account recovery server | Single point of failure; against design principle |
 | Mixnet transport | Significant trade-offs; future version |
 
@@ -137,11 +137,11 @@ The desktop app now has an invite/import/send/poll flow for 1:1 encrypted messag
 
 Hardware unlock enrollment currently records local intent and display metadata. It does not yet use FIDO2 hmac-secret/PRF to derive or unwrap the vault key.
 
-Group messaging currently sends one encrypted envelope per member using the member's 1:1 session. This keeps the relay blind to plaintext, but it does not provide MLS tree-based group forward secrecy or efficient membership changes.
+Group messaging currently sends one encrypted envelope per member using the member's 1:1 session. This keeps the relay blind to plaintext, but the desktop path does not yet provide MLS tree-based group forward secrecy or efficient membership changes.
 
-Tor/I2P mode configures the transport HTTP client to use a proxy. It does not add cover traffic, padding beyond existing envelope buckets, mixnet routing, or global traffic-correlation resistance.
+Tor/I2P mode configures the transport HTTP client to use a proxy. It does not add mixnet routing or global traffic-correlation resistance.
 
-Envelope payloads are padded before relay upload, and the relay exposes a cover-traffic endpoint for padded dummy traffic. These reduce simple size and activity signals, but they do not provide mixnet-level anonymity or global passive adversary resistance.
+Envelope payloads are padded before relay upload, and dummy traffic now uses the same `/v1/envelopes` endpoint as real traffic. These reduce simple size and activity signals, but they do not provide mixnet-level anonymity or global passive adversary resistance.
 
 ---
 

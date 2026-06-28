@@ -8,6 +8,9 @@ use ml_kem::{
 use sha2::{Digest, Sha512};
 
 pub const ML_KEM_768_ALGORITHM_ID: u16 = 0x0101;
+pub const ML_KEM_768_PUBLIC_KEY_BYTES: usize = 1184;
+pub const ML_KEM_768_PRIVATE_KEY_BYTES: usize = 2400;
+pub const ML_KEM_768_CIPHERTEXT_BYTES: usize = 1088;
 
 #[derive(Debug)]
 pub struct HybridKeyOutput {
@@ -37,6 +40,22 @@ pub trait KemProvider {
         private_key: &[u8],
         ciphertext: &[u8],
     ) -> Result<SymmetricKey, CryptoError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PqDowngradePolicy {
+    AllowExplicitDowngrade,
+    RequireHybrid,
+}
+
+pub fn enforce_pq_downgrade_policy(
+    policy: PqDowngradePolicy,
+    pq_prekey_present: bool,
+) -> Result<(), CryptoError> {
+    match (policy, pq_prekey_present) {
+        (PqDowngradePolicy::RequireHybrid, false) => Err(CryptoError::QuantumKEMUnavailable),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -188,6 +207,26 @@ pub fn pqxdh_handshake(
     })
 }
 
+pub fn pqxdh_handshake_with_policy(
+    our_ephemeral_private: &X25519PrivateKey,
+    our_identity_private: &X25519PrivateKey,
+    their_identity_public: &X25519PublicKey,
+    their_signed_prekey: &X25519PublicKey,
+    their_one_time_prekey: Option<&X25519PublicKey>,
+    their_pq_public_key: Option<&[u8]>,
+    policy: PqDowngradePolicy,
+) -> Result<HybridKeyOutput, CryptoError> {
+    enforce_pq_downgrade_policy(policy, their_pq_public_key.is_some())?;
+    pqxdh_handshake(
+        our_ephemeral_private,
+        our_identity_private,
+        their_identity_public,
+        their_signed_prekey,
+        their_one_time_prekey,
+        their_pq_public_key,
+    )
+}
+
 pub fn x25519_shared_secret(
     our_private: &X25519PrivateKey,
     their_public: &X25519PublicKey,
@@ -240,7 +279,10 @@ mod tests {
     fn test_mlkem768_provider_round_trip() {
         let provider = MlKem768Provider;
         let keys = provider.generate_keypair().unwrap();
+        assert_eq!(keys.public_key.len(), ML_KEM_768_PUBLIC_KEY_BYTES);
+        assert_eq!(keys.private_key.len(), ML_KEM_768_PRIVATE_KEY_BYTES);
         let sent = provider.encapsulate(&keys.public_key).unwrap();
+        assert_eq!(sent.ciphertext.len(), ML_KEM_768_CIPHERTEXT_BYTES);
         let received = provider
             .decapsulate(&keys.private_key, &sent.ciphertext)
             .unwrap();
@@ -254,5 +296,27 @@ mod tests {
         let provider = MlKem768Provider;
         let err = provider.encapsulate(b"not-a-valid-key").unwrap_err();
         assert_eq!(err, CryptoError::InvalidKemPublicKey);
+    }
+
+    #[test]
+    fn test_mlkem768_provider_rejects_bad_ciphertext() {
+        let provider = MlKem768Provider;
+        let keys = provider.generate_keypair().unwrap();
+        let err = provider
+            .decapsulate(&keys.private_key, b"bad-ct")
+            .unwrap_err();
+        assert_eq!(err, CryptoError::InvalidKemCiphertext);
+    }
+
+    #[test]
+    fn test_pq_downgrade_policy_fails_closed_when_required() {
+        assert_eq!(
+            enforce_pq_downgrade_policy(PqDowngradePolicy::RequireHybrid, false),
+            Err(CryptoError::QuantumKEMUnavailable)
+        );
+        assert!(enforce_pq_downgrade_policy(PqDowngradePolicy::RequireHybrid, true).is_ok());
+        assert!(
+            enforce_pq_downgrade_policy(PqDowngradePolicy::AllowExplicitDowngrade, false).is_ok()
+        );
     }
 }

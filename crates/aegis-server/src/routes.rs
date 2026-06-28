@@ -24,7 +24,8 @@ const MAX_ENVELOPE_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_ENVELOPE_BYTES: usize = 1024 * 1024;
 const MAX_PUBLIC_KEY_BYTES: usize = 2 * 1024;
 const ED25519_SIGNATURE_BYTES: usize = 64;
-const MAX_COVER_BYTES: usize = 64 * 1024;
+const MAX_DEVICE_LINK_BYTES: usize = 256 * 1024;
+const MAX_DEVICE_LINK_TTL_SECONDS: i64 = 10 * 60;
 
 fn current_bucket() -> String {
     let now = Utc::now();
@@ -135,6 +136,8 @@ struct UploadEnvelope {
     ciphertext_blob: String,
     padded_size_bucket: i32,
     ttl_seconds: Option<i64>,
+    #[serde(default)]
+    dummy: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,6 +183,7 @@ async fn upload_envelope(
         created_at_bucket: bucket,
         expires_at,
         delivery_state: "pending".to_string(),
+        is_dummy: body.dummy,
     };
 
     let env_id_copy = envelope.id;
@@ -396,10 +400,12 @@ async fn get_prekey_bundle(
 }
 
 async fn health() -> impl IntoResponse {
+    let gates = aegis_protocol::mls::SecurityClaimGates::conservative_default();
     Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "timestamp": Utc::now().to_rfc3339(),
+        "security_claim_gates": gates,
     }))
 }
 
@@ -412,10 +418,218 @@ struct CoverTraffic {
 async fn cover_traffic(Json(body): Json<CoverTraffic>) -> Result<StatusCode, ServerError> {
     let padding = base64_url_decode(&body.padding)
         .map_err(|_| ServerError::BadRequest("invalid cover padding base64".into()))?;
-    if padding.len() > MAX_COVER_BYTES || body.padded_size_bucket < 0 {
+    if padding.len() > MAX_ENVELOPE_BYTES || body.padded_size_bucket < 0 {
         return Err(ServerError::PayloadTooLarge);
     }
-    Ok(StatusCode::NO_CONTENT)
+    Err(ServerError::BadRequest(
+        "deprecated: send encrypted dummy envelopes through /v1/envelopes".into(),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct PublishDeviceKeyPackage {
+    account_id: String,
+    device_id: String,
+    mls_key_package: String,
+    device_list_signature: String,
+    key_version: i32,
+}
+
+async fn publish_device_key_package(
+    State(state): State<AppState>,
+    Json(body): Json<PublishDeviceKeyPackage>,
+) -> Result<impl IntoResponse, ServerError> {
+    let account_id = decode_base64_url_32(&body.account_id, "account id")?;
+    let device_id = decode_base64_url_32(&body.device_id, "device id")?;
+    let mls_key_package = decode_public_material(&body.mls_key_package, "mls_key_package")?;
+    let device_list_signature = base64_url_decode(&body.device_list_signature)
+        .map_err(|_| ServerError::BadRequest("invalid device list signature base64".into()))?;
+    if device_list_signature.len() != ED25519_SIGNATURE_BYTES {
+        return Err(ServerError::BadRequest(
+            "invalid device list signature length".into(),
+        ));
+    }
+
+    let package = crate::state::DeviceKeyPackage {
+        account_id,
+        device_id,
+        mls_key_package,
+        device_list_signature,
+        key_version: body.key_version,
+        created_at_bucket: current_bucket(),
+    };
+    state
+        .device_key_packages
+        .write()
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .insert(device_id, package.clone());
+    state.save_to_disk().map_err(ServerError::Internal)?;
+
+    Ok(Json(serde_json::json!({
+        "account_id": base64_url_encode(&package.account_id),
+        "device_id": base64_url_encode(&package.device_id),
+        "mls_key_package": base64_url_encode(&package.mls_key_package),
+        "device_list_signature": base64_url_encode(&package.device_list_signature),
+        "key_version": package.key_version,
+        "created_at_bucket": package.created_at_bucket,
+    })))
+}
+
+async fn get_device_key_package(
+    State(state): State<AppState>,
+    Path(device_id_b64): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    let device_id = decode_base64_url_32(&device_id_b64, "device id")?;
+    let packages = state
+        .device_key_packages
+        .read()
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let package = packages.get(&device_id).ok_or(ServerError::NotFound)?;
+    Ok(Json(serde_json::json!({
+        "account_id": base64_url_encode(&package.account_id),
+        "device_id": base64_url_encode(&package.device_id),
+        "mls_key_package": base64_url_encode(&package.mls_key_package),
+        "device_list_signature": base64_url_encode(&package.device_list_signature),
+        "key_version": package.key_version,
+        "created_at_bucket": package.created_at_bucket,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct AppendTransparencyLogEvent {
+    account_id: String,
+    device_id: String,
+    event_type: String,
+    event_hash: String,
+    prev_hash: String,
+    signature: String,
+}
+
+async fn append_transparency_log_event(
+    State(state): State<AppState>,
+    Json(body): Json<AppendTransparencyLogEvent>,
+) -> Result<impl IntoResponse, ServerError> {
+    let event = crate::state::TransparencyLogEvent {
+        event_id: aegis_crypto::random::random_32bytes(),
+        account_id: decode_base64_url_32(&body.account_id, "account id")?,
+        device_id: decode_base64_url_32(&body.device_id, "device id")?,
+        event_type: body.event_type,
+        event_hash: base64_url_decode(&body.event_hash)
+            .map_err(|_| ServerError::BadRequest("invalid event hash base64".into()))?,
+        prev_hash: base64_url_decode(&body.prev_hash)
+            .map_err(|_| ServerError::BadRequest("invalid previous hash base64".into()))?,
+        signature: base64_url_decode(&body.signature)
+            .map_err(|_| ServerError::BadRequest("invalid signature base64".into()))?,
+        created_at_bucket: current_bucket(),
+    };
+    if event.signature.len() != ED25519_SIGNATURE_BYTES {
+        return Err(ServerError::BadRequest("invalid signature length".into()));
+    }
+    state
+        .transparency_log
+        .write()
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .push(event.clone());
+    state.save_to_disk().map_err(ServerError::Internal)?;
+    Ok(Json(transparency_event_json(&event)))
+}
+
+#[derive(Debug, Deserialize)]
+struct TransparencyQuery {
+    account_id: String,
+}
+
+async fn list_transparency_log_events(
+    State(state): State<AppState>,
+    Query(params): Query<TransparencyQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let account_id = decode_base64_url_32(&params.account_id, "account id")?;
+    let events: Vec<_> = state
+        .transparency_log
+        .read()
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .iter()
+        .filter(|event| event.account_id == account_id)
+        .map(transparency_event_json)
+        .collect();
+    Ok(Json(serde_json::json!({ "events": events })))
+}
+
+fn transparency_event_json(event: &crate::state::TransparencyLogEvent) -> serde_json::Value {
+    serde_json::json!({
+        "event_id": base64_url_encode(&event.event_id),
+        "account_id": base64_url_encode(&event.account_id),
+        "device_id": base64_url_encode(&event.device_id),
+        "event_type": event.event_type,
+        "event_hash": base64_url_encode(&event.event_hash),
+        "prev_hash": base64_url_encode(&event.prev_hash),
+        "signature": base64_url_encode(&event.signature),
+        "created_at_bucket": event.created_at_bucket,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct SubmitDeviceLinkBundle {
+    account_id: String,
+    target_device_id: String,
+    encrypted_payload: String,
+    ttl_seconds: Option<i64>,
+}
+
+async fn submit_device_link_bundle(
+    State(state): State<AppState>,
+    Json(body): Json<SubmitDeviceLinkBundle>,
+) -> Result<impl IntoResponse, ServerError> {
+    let encrypted_payload = base64_url_decode(&body.encrypted_payload)
+        .map_err(|_| ServerError::BadRequest("invalid encrypted payload base64".into()))?;
+    if encrypted_payload.is_empty() || encrypted_payload.len() > MAX_DEVICE_LINK_BYTES {
+        return Err(ServerError::PayloadTooLarge);
+    }
+    let ttl = validate_ttl(
+        body.ttl_seconds,
+        MAX_DEVICE_LINK_TTL_SECONDS,
+        MAX_DEVICE_LINK_TTL_SECONDS,
+    )?;
+    let bundle = crate::state::DeviceLinkBundle {
+        bundle_id: aegis_crypto::random::random_32bytes(),
+        account_id: decode_base64_url_32(&body.account_id, "account id")?,
+        target_device_id: decode_base64_url_32(&body.target_device_id, "target device id")?,
+        encrypted_payload,
+        created_at_bucket: current_bucket(),
+        expires_at: Utc::now() + chrono::Duration::seconds(ttl),
+    };
+    state
+        .device_link_bundles
+        .write()
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .insert(bundle.bundle_id, bundle.clone());
+    state.save_to_disk().map_err(ServerError::Internal)?;
+    Ok(Json(device_link_bundle_json(&bundle)))
+}
+
+async fn get_device_link_bundle(
+    State(state): State<AppState>,
+    Path(bundle_id_b64): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    cleanup_expired_device_links(&state)?;
+    let bundle_id = decode_base64_url_32(&bundle_id_b64, "bundle id")?;
+    let bundles = state
+        .device_link_bundles
+        .read()
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let bundle = bundles.get(&bundle_id).ok_or(ServerError::NotFound)?;
+    Ok(Json(device_link_bundle_json(bundle)))
+}
+
+fn device_link_bundle_json(bundle: &crate::state::DeviceLinkBundle) -> serde_json::Value {
+    serde_json::json!({
+        "bundle_id": base64_url_encode(&bundle.bundle_id),
+        "account_id": base64_url_encode(&bundle.account_id),
+        "target_device_id": base64_url_encode(&bundle.target_device_id),
+        "encrypted_payload": base64_url_encode(&bundle.encrypted_payload),
+        "expires_at": bundle.expires_at.to_rfc3339(),
+        "created_at_bucket": bundle.created_at_bucket,
+    })
 }
 
 fn base64_url_encode(data: &[u8]) -> String {
@@ -544,6 +758,33 @@ fn cleanup_expired(state: &AppState) -> Result<(), ServerError> {
     Ok(())
 }
 
+fn cleanup_expired_device_links(state: &AppState) -> Result<(), ServerError> {
+    let now = Utc::now();
+    let expired_ids: Vec<[u8; 32]> = state
+        .device_link_bundles
+        .read()
+        .map_err(|e| ServerError::Internal(e.to_string()))?
+        .iter()
+        .filter_map(|(id, bundle)| (bundle.expires_at < now).then_some(*id))
+        .collect();
+
+    if expired_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut bundles = state
+        .device_link_bundles
+        .write()
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    for id in expired_ids {
+        bundles.remove(&id);
+    }
+    drop(bundles);
+    state.save_to_disk().map_err(ServerError::Internal)?;
+
+    Ok(())
+}
+
 pub fn build_router(relay_mode: RelayMode) -> Router {
     let state: AppState = std::sync::Arc::new(ServerState::new(relay_mode));
     build_router_with_state(state)
@@ -566,6 +807,18 @@ fn build_router_with_state(state: AppState) -> Router {
         .route("/v1/accounts", post(create_account))
         .route("/v1/devices/register", post(register_device))
         .route("/v1/prekeys/upload", post(upload_prekey_bundle))
+        .route("/v1/device-key-packages", post(publish_device_key_package))
+        .route(
+            "/v1/device-key-packages/{device_id}",
+            get(get_device_key_package),
+        )
+        .route("/v1/transparency-log", post(append_transparency_log_event))
+        .route("/v1/transparency-log", get(list_transparency_log_events))
+        .route("/v1/device-link-bundles", post(submit_device_link_bundle))
+        .route(
+            "/v1/device-link-bundles/{bundle_id}",
+            get(get_device_link_bundle),
+        )
         .route("/v1/queues", post(create_queue))
         .route("/v1/cover", post(cover_traffic))
         .route("/v1/envelopes", post(upload_envelope))
@@ -844,7 +1097,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cover_traffic_accepts_padded_dummy_payload_without_storage() {
+    async fn deprecated_cover_endpoint_tells_clients_to_use_dummy_envelopes() {
         let app = build_router(RelayMode::StrictEphemeral);
         let response = send_json(
             app,
@@ -857,6 +1110,127 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn dummy_traffic_uses_the_same_envelope_endpoint_as_real_traffic() {
+        let app = build_router(RelayMode::StrictEphemeral);
+        let queue = create_queue(app.clone()).await;
+        let queue_id = queue["queue_id"].as_str().unwrap();
+        let read_token = queue["read_token"].as_str().unwrap();
+        let write_token = queue["write_token"].as_str().unwrap();
+
+        let uploaded = send_json(
+            app.clone(),
+            "POST",
+            "/v1/envelopes",
+            Some(write_token),
+            json!({
+                "queue_id_hash": queue_id,
+                "ciphertext_blob": base64_url_encode(&[7u8; 1024]),
+                "padded_size_bucket": 1024,
+                "dummy": true
+            }),
+        )
+        .await;
+        assert_eq!(uploaded.status(), StatusCode::OK);
+
+        let poll = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/envelopes?queue={queue_id}"))
+                    .header("authorization", format!("Bearer {read_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(poll.status(), StatusCode::OK);
+        let body = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["envelopes"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn device_key_package_transparency_and_link_bundle_round_trip() {
+        let app = build_router(RelayMode::StrictEphemeral);
+        let account_id = base64_url_encode(&[1u8; 32]);
+        let device_id = base64_url_encode(&[2u8; 32]);
+
+        let package = send_json(
+            app.clone(),
+            "POST",
+            "/v1/device-key-packages",
+            None,
+            json!({
+                "account_id": account_id,
+                "device_id": device_id,
+                "mls_key_package": base64_url_encode(b"mls-key-package"),
+                "device_list_signature": base64_url_encode(&[3u8; 64]),
+                "key_version": 1
+            }),
+        )
+        .await;
+        assert_eq!(package.status(), StatusCode::OK);
+
+        let fetched = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/device-key-packages/{device_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fetched.status(), StatusCode::OK);
+
+        let event = send_json(
+            app.clone(),
+            "POST",
+            "/v1/transparency-log",
+            None,
+            json!({
+                "account_id": account_id,
+                "device_id": device_id,
+                "event_type": "device_add",
+                "event_hash": base64_url_encode(&[4u8; 32]),
+                "prev_hash": base64_url_encode(&[0u8; 32]),
+                "signature": base64_url_encode(&[5u8; 64])
+            }),
+        )
+        .await;
+        assert_eq!(event.status(), StatusCode::OK);
+
+        let log = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/transparency-log?account_id={account_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(log.status(), StatusCode::OK);
+
+        let bundle = send_json(
+            app,
+            "POST",
+            "/v1/device-link-bundles",
+            None,
+            json!({
+                "account_id": account_id,
+                "target_device_id": device_id,
+                "encrypted_payload": base64_url_encode(b"encrypted-device-state"),
+                "ttl_seconds": 60
+            }),
+        )
+        .await;
+        assert_eq!(bundle.status(), StatusCode::OK);
     }
 }

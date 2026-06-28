@@ -14,9 +14,18 @@ async fn main() {
         .init();
 
     let addr: SocketAddr = std::env::var("AEGIS_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:8080".into())
+        .unwrap_or_else(|_| "127.0.0.1:8080".into())
         .parse()
         .expect("invalid AEGIS_BIND address");
+
+    let allow_insecure_public_http = std::env::var("AEGIS_ALLOW_INSECURE_PUBLIC_HTTP")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if !addr.ip().is_loopback() && !allow_insecure_public_http {
+        panic!(
+            "refusing public plaintext HTTP bind; use a TLS 1.3 reverse proxy or set AEGIS_ALLOW_INSECURE_PUBLIC_HTTP=1 for explicit lab-only testing"
+        );
+    }
 
     tracing::info!(%addr, "Aegis relay server starting");
 

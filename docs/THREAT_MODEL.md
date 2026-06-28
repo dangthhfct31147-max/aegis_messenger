@@ -85,7 +85,7 @@ This document covers Aegis Messenger, an ultra-secure end-to-end encrypted messe
 - Optional Tor transport layer.
 - No direct P2P connections; all traffic routed through relay.
 - Queue ID rotation.
-- Cover traffic in extreme mode.
+- Dummy envelopes share the normal envelope endpoint; high-privacy cadence controls are staged but not a complete mixnet.
 
 **Residual Risk:** Traffic analysis may correlate volume patterns with known message send/receive events. Latency-based traffic analysis is a known limitation.
 
@@ -237,11 +237,11 @@ This document covers Aegis Messenger, an ultra-secure end-to-end encrypted messe
 | Property | Achieved? | Mechanism |
 |---|---|---|
 | End-to-end encryption | Yes | XChaCha20-Poly1305, Double Ratchet |
-| Forward secrecy | Yes | Ratchet advances delete old keys |
-| Post-compromise recovery | Yes | New key agreement on ratchet reset |
-| Post-quantum key agreement | Yes (hybrid) | X25519 + ML-KEM-768 |
+| Forward secrecy | Partial | Ratchet state exists; desktop flow and relay deployment claims are gated |
+| Post-compromise recovery | Partial | New key agreement on ratchet reset; production UX still pending |
+| Post-quantum key agreement | Partial | X25519 + ML-KEM-768 with fail-closed policy hooks; external audit pending |
 | Server cannot read messages | Yes | Client-side encryption before send |
-| Server cannot see social graph | Yes | No plaintext contact/conversation storage |
+| Server cannot see social graph | Partial | No plaintext contact/conversation storage, but timing and queue observation can still leak relationships |
 | Server cannot see metadata | Partial | Queue ID hashing, TTL deletion |
 | Local vault encryption | Yes | Argon2id + AEAD |
 | Hardware key protection | Yes (optional) | FIDO2 PRF |

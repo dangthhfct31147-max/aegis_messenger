@@ -40,6 +40,65 @@ pub struct PrekeyBundle {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceKeyPackage {
+    pub account_id: String,
+    pub device_id: String,
+    pub mls_key_package: String,
+    pub device_list_signature: String,
+    pub key_version: u32,
+    pub created_at_bucket: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PublishDeviceKeyPackage {
+    pub account_id: String,
+    pub device_id: String,
+    pub mls_key_package: String,
+    pub device_list_signature: String,
+    pub key_version: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TransparencyLogEvent {
+    pub event_id: String,
+    pub account_id: String,
+    pub device_id: String,
+    pub event_type: String,
+    pub event_hash: String,
+    pub prev_hash: String,
+    pub signature: String,
+    pub created_at_bucket: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AppendTransparencyLogEvent {
+    pub account_id: String,
+    pub device_id: String,
+    pub event_type: String,
+    pub event_hash: String,
+    pub prev_hash: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeviceLinkBundle {
+    pub bundle_id: String,
+    pub account_id: String,
+    pub target_device_id: String,
+    pub encrypted_payload: String,
+    pub expires_at: String,
+    pub created_at_bucket: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SubmitDeviceLinkBundle {
+    pub account_id: String,
+    pub target_device_id: String,
+    pub encrypted_payload: String,
+    pub ttl_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EncryptedFileChunk {
     pub chunk_id: u32,
     pub hash: String,

@@ -5,6 +5,7 @@ pub mod envelope;
 pub mod error;
 pub mod group;
 pub mod handshake;
+pub mod mls;
 pub mod models;
 pub mod session;
 
