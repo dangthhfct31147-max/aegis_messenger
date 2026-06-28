@@ -46,6 +46,39 @@ jobs:
         run: cargo test --workspace --all-targets --no-fail-fast
 
   # ============================================================
+  # Security Baseline — dependency and secret checks
+  # ============================================================
+  security:
+    name: Security Baseline
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          version: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: target
+
+      - name: Cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================
   # Desktop App Build — runs on every push
   # ============================================================
   build-desktop:

@@ -5,6 +5,8 @@
     currentView,
     serverHealth,
     contacts,
+    groups,
+    messages,
     selectedContactId,
   } from '$lib/stores/app.js';
   import {
@@ -13,14 +15,34 @@
     vaultLock,
     vaultCreate,
     vaultIsInitialized,
+    createInvite,
+    importContact,
+    verifyContact,
+    listContacts,
+    listMessages,
+    sendMessage,
+    pollMessages,
     serverHealth as fetchServerHealth,
+    setTransportProxy,
+    enableHardwareUnlock,
+    createGroup,
+    listGroups,
   } from '$lib/api/backend.js';
 
   let passphrase = '';
   let confirmPassphrase = '';
   let error = '';
   let loading = false;
-  let initMode = false;
+  let inviteDisplayName = 'Aegis Desktop';
+  let inviteOutput = '';
+  let importInviteText = '';
+  let importDisplayName = '';
+  let outboundText = '';
+  let proxyMode = 'direct';
+  let proxyUrl = '';
+  let hardwareLabel = 'Local platform key';
+  let groupName = '';
+  let selectedGroupMembers = new Set();
 
   // Check vault state on mount
   onMount(async () => {
@@ -29,6 +51,7 @@
       vaultState.set(status);
       if (!status.isLocked) {
         currentView.set('conversations');
+        await refreshWorkspace();
       }
 
       // Check server health
@@ -52,6 +75,7 @@
       vaultState.update((s) => ({ ...s, isLocked: false }));
       currentView.set('conversations');
       passphrase = '';
+      await refreshWorkspace();
     } catch (e) {
       error = 'Invalid passphrase. Please try again.';
     } finally {
@@ -76,6 +100,7 @@
       currentView.set('conversations');
       passphrase = '';
       confirmPassphrase = '';
+      await refreshWorkspace();
     } catch (e) {
       error = `Setup failed: ${e}`;
     } finally {
@@ -87,6 +112,123 @@
     vaultState.update((s) => ({ ...s, isLocked: true }));
     currentView.set('unlock');
   }
+
+  async function refreshWorkspace() {
+    const loadedContacts = await listContacts();
+    contacts.set(loadedContacts);
+    const loadedGroups = await listGroups();
+    groups.set(loadedGroups);
+    for (const contact of loadedContacts) {
+      const loadedMessages = await listMessages(contact.id);
+      messages.update((all) => ({ ...all, [contact.id]: loadedMessages }));
+    }
+  }
+
+  async function handleCreateInvite() {
+    error = '';
+    loading = true;
+    try {
+      inviteOutput = await createInvite(inviteDisplayName || 'Aegis Desktop');
+      await refreshWorkspace();
+    } catch (e) {
+      error = `Invite failed: ${e}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function handleImportContact() {
+    error = '';
+    loading = true;
+    try {
+      const contact = /** @type {{ id: string, display_name: string, safety_number: string, added_at: string }} */ (
+        await importContact(importInviteText, importDisplayName || null)
+      );
+      contacts.update((items) => [...items, contact]);
+      selectedContactId.set(contact.id);
+      importInviteText = '';
+      importDisplayName = '';
+      await refreshWorkspace();
+    } catch (e) {
+      error = `Import failed: ${e}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function handleSend() {
+    if (!$selectedContactId || !outboundText.trim()) return;
+    const text = outboundText.trim();
+    outboundText = '';
+    try {
+      const message = await sendMessage($selectedContactId, text);
+      messages.update((all) => ({
+        ...all,
+        [$selectedContactId]: [...(all[$selectedContactId] || []), message],
+      }));
+    } catch (e) {
+      error = `Send failed: ${e}`;
+    }
+  }
+
+  async function handlePoll() {
+    error = '';
+    try {
+      const incoming = await pollMessages();
+      if (incoming.length > 0) {
+        messages.update((all) => {
+          const next = /** @type {Record<string, any[]>} */ ({ ...all });
+          for (const msg of incoming) {
+            next[msg.contact_id] = [...(next[msg.contact_id] || []), msg];
+          }
+          return next;
+        });
+      }
+    } catch (e) {
+      error = `Sync failed: ${e}`;
+    }
+  }
+
+  async function handleVerifyContact() {
+    if (!$selectedContactId) return;
+    await verifyContact($selectedContactId);
+    await refreshWorkspace();
+  }
+
+  async function handleProxySave() {
+    error = '';
+    try {
+      await setTransportProxy(proxyMode, proxyUrl || null);
+    } catch (e) {
+      error = `Proxy failed: ${e}`;
+    }
+  }
+
+  async function handleHardwareEnable() {
+    error = '';
+    try {
+      await enableHardwareUnlock(hardwareLabel || 'Local platform key');
+    } catch (e) {
+      error = `Hardware key setup failed: ${e}`;
+    }
+  }
+
+  async function handleCreateGroup() {
+    if (!groupName.trim() || selectedGroupMembers.size === 0) return;
+    try {
+      await createGroup(groupName.trim(), Array.from(selectedGroupMembers));
+      groupName = '';
+      selectedGroupMembers = new Set();
+      groups.set(await listGroups());
+    } catch (e) {
+      error = `Group failed: ${e}`;
+    }
+  }
+
+  $: selectedContact = $contacts.find((contact) => contact.id === $selectedContactId);
+  $: selectedMessages = /** @type {any[]} */ (
+    $selectedContactId ? $messages[$selectedContactId] || [] : []
+  );
 </script>
 
 <div class="app">
@@ -197,7 +339,12 @@
               <button
                 class="contact-item"
                 class:active={$selectedContactId === contact.id}
-                on:click={() => selectedContactId.set(contact.id)}
+                on:click={async () => {
+                  selectedContactId.set(contact.id);
+                  currentView.set('chat');
+                  const loadedMessages = await listMessages(contact.id);
+                  messages.update((all) => ({ ...all, [contact.id]: loadedMessages }));
+                }}
               >
                 <div class="contact-avatar">{contact.display_name[0]?.toUpperCase() || '?'}</div>
                 <div class="contact-info">
@@ -234,10 +381,113 @@
               <p class="text-secondary">
                 Add a contact to start an encrypted conversation
               </p>
-              <button class="btn-primary" on:click={() => {}}>
+              <button class="btn-primary" on:click={() => currentView.set('settings')}>
                 Add Contact
               </button>
             </div>
+          </div>
+        {/if}
+
+        {#if $currentView === 'chat' && selectedContact}
+          <div class="chat-view">
+            <header class="chat-header">
+              <div>
+                <h2>{selectedContact.display_name}</h2>
+                <p>Safety {selectedContact.safety_number}</p>
+              </div>
+              <div class="chat-actions">
+                <button class="btn-ghost" on:click={handleVerifyContact}>Verify</button>
+                <button class="btn-ghost" on:click={handlePoll}>Sync</button>
+              </div>
+            </header>
+            <div class="message-list">
+              {#each selectedMessages as message}
+                <div class="message-row" class:outbound={message.direction === 'outbound'}>
+                  <div class="message-bubble">
+                    <p>{message.text}</p>
+                    <span>{new Date(message.created_at).toLocaleTimeString()}</span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+            <form class="composer" on:submit|preventDefault={handleSend}>
+              <input bind:value={outboundText} placeholder="Type encrypted message..." />
+              <button class="btn-primary" type="submit">Send</button>
+            </form>
+          </div>
+        {/if}
+
+        {#if $currentView === 'settings'}
+          <div class="settings-view">
+            <section class="tool-section">
+              <h2>Pairing</h2>
+              <div class="two-col">
+                <div>
+                  <input bind:value={inviteDisplayName} placeholder="Your display name" />
+                  <button class="btn-primary w-full" on:click={handleCreateInvite} disabled={loading}>
+                    Create Invite
+                  </button>
+                  <textarea readonly bind:value={inviteOutput} placeholder="Invite JSON appears here"></textarea>
+                </div>
+                <div>
+                  <input bind:value={importDisplayName} placeholder="Contact display name" />
+                  <textarea bind:value={importInviteText} placeholder="Paste contact invite JSON"></textarea>
+                  <button class="btn-primary w-full" on:click={handleImportContact} disabled={loading}>
+                    Import Contact
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section class="tool-section">
+              <h2>Transport</h2>
+              <div class="row">
+                <select bind:value={proxyMode}>
+                  <option value="direct">Direct</option>
+                  <option value="tor">Tor SOCKS</option>
+                  <option value="i2p">I2P HTTP</option>
+                </select>
+                <input bind:value={proxyUrl} placeholder="Optional proxy URL" />
+                <button class="btn-primary" on:click={handleProxySave}>Save</button>
+              </div>
+            </section>
+
+            <section class="tool-section">
+              <h2>Hardware Unlock</h2>
+              <div class="row">
+                <input bind:value={hardwareLabel} placeholder="Hardware key label" />
+                <button class="btn-primary" on:click={handleHardwareEnable}>Enable</button>
+              </div>
+            </section>
+
+            <section class="tool-section">
+              <h2>Groups</h2>
+              <div class="row">
+                <input bind:value={groupName} placeholder="Group name" />
+                <button class="btn-primary" on:click={handleCreateGroup}>Create</button>
+              </div>
+              <div class="member-grid">
+                {#each $contacts as contact}
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={selectedGroupMembers.has(contact.id)}
+                      on:change={(event) => {
+                        const next = new Set(selectedGroupMembers);
+                        event.currentTarget.checked ? next.add(contact.id) : next.delete(contact.id);
+                        selectedGroupMembers = next;
+                      }}
+                    />
+                    {contact.display_name}
+                  </label>
+                {/each}
+              </div>
+              <div class="group-list">
+                {#each $groups as group}
+                  <div>{group.name} · {group.member_count} members</div>
+                {/each}
+              </div>
+            </section>
           </div>
         {/if}
       </main>
@@ -498,6 +748,150 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .chat-view,
+  .settings-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .chat-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .chat-header h2,
+  .tool-section h2 {
+    font-size: 16px;
+    margin: 0 0 4px;
+  }
+
+  .chat-header p {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin: 0;
+  }
+
+  .chat-actions,
+  .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .message-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+
+  .message-row {
+    display: flex;
+    margin-bottom: 10px;
+  }
+
+  .message-row.outbound {
+    justify-content: flex-end;
+  }
+
+  .message-bubble {
+    max-width: min(520px, 80%);
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+  }
+
+  .message-row.outbound .message-bubble {
+    background: var(--accent-dim);
+  }
+
+  .message-bubble p {
+    margin: 0 0 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .message-bubble span {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .composer {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .settings-view {
+    overflow-y: auto;
+    padding: 20px;
+    gap: 18px;
+  }
+
+  .tool-section {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .tool-section input,
+  .tool-section select,
+  .tool-section textarea,
+  .composer input {
+    width: 100%;
+  }
+
+  .tool-section textarea {
+    min-height: 120px;
+    resize: vertical;
+    margin: 8px 0;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .member-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .member-grid label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+  }
+
+  .group-list {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-top: 10px;
+  }
+
+  @media (max-width: 760px) {
+    .two-col {
+      grid-template-columns: 1fr;
+    }
+    .row {
+      align-items: stretch;
+      flex-direction: column;
+    }
   }
 
   .empty-state {

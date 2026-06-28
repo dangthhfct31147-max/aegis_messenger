@@ -28,6 +28,8 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 directories = "5"
 reqwest = { version = "0.12", features = ["json"] }
+base64 = "0.22"
+sha2 = "0.10"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-notification = "2"

@@ -10,13 +10,25 @@ pub struct TransportClient {
 
 impl TransportClient {
     pub fn new(server_url: &str) -> Self {
-        Self {
-            server_url: server_url.to_string(),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("reqwest client creation failed"),
+        Self::with_proxy(server_url, None).expect("reqwest client creation failed")
+    }
+
+    pub fn with_proxy(
+        server_url: &str,
+        proxy_url: Option<&str>,
+    ) -> Result<Self, crate::error::TransportError> {
+        let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+        if let Some(proxy_url) = proxy_url {
+            let proxy = reqwest::Proxy::all(proxy_url)
+                .map_err(|e| crate::error::TransportError::RequestFailed(e.to_string()))?;
+            builder = builder.proxy(proxy);
         }
+        Ok(Self {
+            server_url: server_url.to_string(),
+            client: builder
+                .build()
+                .map_err(|e| crate::error::TransportError::RequestFailed(e.to_string()))?,
+        })
     }
 
     pub async fn health_check(&self) -> Result<HealthResponse, crate::error::TransportError> {
@@ -86,6 +98,71 @@ impl TransportClient {
             .await
             .map_err(|e| crate::error::TransportError::Parse(e.to_string()))?;
         Ok(info)
+    }
+
+    pub async fn register_device(
+        &self,
+        registration: &aegis_protocol::DeviceRegistration,
+    ) -> Result<aegis_protocol::RegisteredDevice, crate::error::TransportError> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/devices/register", self.server_url))
+            .json(registration)
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
+    }
+
+    pub async fn upload_prekey_bundle(
+        &self,
+        registration: &aegis_protocol::DeviceRegistration,
+    ) -> Result<aegis_protocol::RegisteredDevice, crate::error::TransportError> {
+        let resp = self
+            .client
+            .post(format!("{}/v1/prekeys/upload", self.server_url))
+            .json(registration)
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
+    }
+
+    pub async fn get_prekey_bundle(
+        &self,
+        device_id: &str,
+    ) -> Result<aegis_protocol::PrekeyBundle, crate::error::TransportError> {
+        let resp = self
+            .client
+            .get(format!("{}/v1/prekeys/{}", self.server_url, device_id))
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        resp.json()
+            .await
+            .map_err(|e| crate::error::TransportError::Parse(e.to_string()))
     }
 
     pub async fn upload_envelope(

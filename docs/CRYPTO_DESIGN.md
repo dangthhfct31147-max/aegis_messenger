@@ -25,12 +25,12 @@
 | Ed25519 Signatures | `ed25519-dalek` | 2.x | formal review |
 | Argon2id KDF | `argon2` | latest | RFC 9106 |
 | HKDF | `hkdf` | latest | RFC 5869 |
-| ML-KEM-768 KEM | `kyber` | latest | NIST PQC standard |
+| ML-KEM-768 KEM | `ml-kem` | 0.2.x | RustCrypto implementation of FIPS 203; wrapped by `KemProvider` |
 | SHA-512 | `sha2` | latest | FIPS 180-4 |
 | BLAKE3 | `blake3` | latest | external audit |
 | Randomness | `getrandom` | latest | OS CSPRNG |
 
-> **Note on ML-KEM-768 / ML-DSA:** These use the `kyber` and `ml-dsa` crates which implement the NIST PQC standard algorithms. If the crates are not yet stable / audited by the time of production use, we will use the WASM bindings to the official `liboqs` C library. We do NOT implement these algorithms from scratch.
+> **Note on ML-KEM-768 / ML-DSA:** ML-KEM-768 is accessed through an internal provider abstraction so the backend can be replaced if the ecosystem or audit status changes. We do NOT implement post-quantum algorithms from scratch.
 
 ---
 
@@ -243,6 +243,8 @@ Envelope {
 ---
 
 ## 8. Group Messaging (MLS-Inspired)
+
+Current desktop group messaging is implemented as per-recipient encrypted fanout over existing 1:1 contact secrets. This is an MVP compatibility layer, not an RFC 9420 MLS implementation.
 
 ### 8.1 Group Model
 

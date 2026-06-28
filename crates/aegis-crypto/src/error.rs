@@ -59,6 +59,18 @@ pub enum CryptoError {
     #[error("key agreement: quantum component unavailable")]
     QuantumKEMUnavailable,
 
+    #[error("key agreement: invalid KEM public key")]
+    InvalidKemPublicKey,
+
+    #[error("key agreement: invalid KEM private key")]
+    InvalidKemPrivateKey,
+
+    #[error("key agreement: invalid KEM ciphertext")]
+    InvalidKemCiphertext,
+
+    #[error("key agreement: KEM operation failed")]
+    KemOperationFailed,
+
     #[error("key agreement: hybrid key mismatch")]
     HybridKeyMismatch,
 

@@ -234,6 +234,7 @@ pub struct PrekeyBundle {
     pub signed_prekey: X25519PublicKey,
     pub signed_prekey_signature: Ed25519Signature,
     pub one_time_prekey: Option<X25519PublicKey>,
+    pub pq_prekey_public: Option<Vec<u8>>,
     pub cipher_suite: CipherSuite,
     pub key_version: u32,
 }
@@ -243,6 +244,19 @@ pub struct PrekeyBundle {
 pub enum CipherSuite {
     #[default]
     Aegis1 = 0x0001,
+}
+
+impl CipherSuite {
+    pub fn from_id(id: u16) -> Result<Self, crate::CryptoError> {
+        match id {
+            0x0001 => Ok(Self::Aegis1),
+            other => Err(crate::CryptoError::UnknownCipherSuite(other)),
+        }
+    }
+
+    pub fn id(self) -> u16 {
+        self as u16
+    }
 }
 
 pub const PROTOCOL_VERSION: u16 = 0x0001;

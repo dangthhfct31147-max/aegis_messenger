@@ -4,9 +4,11 @@ use aegis_crypto::{
     kdf::hkdf_cat, kem::x25519_dh, CipherSuite, SymmetricKey, X25519PrivateKey, X25519PublicKey,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::error::ProtocolError;
+
+const MAX_SKIPPED_MESSAGE_KEYS: u64 = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RatchetState {
@@ -38,6 +40,7 @@ pub struct DoubleRatchetSession {
     pub sending: RatchetState,
     pub receiving: RatchetState,
     skipped_keys: BTreeMap<(u64, u64), [u8; 32]>,
+    seen_messages: BTreeSet<(u64, u64)>,
     root_key: Option<[u8; 32]>,
     pub remote_identity: Option<[u8; 32]>,
     pub our_identity_private: Option<[u8; 32]>,
@@ -98,6 +101,7 @@ impl DoubleRatchetSession {
             sending,
             receiving,
             skipped_keys: BTreeMap::new(),
+            seen_messages: BTreeSet::new(),
             root_key: Some(root_key_bytes),
             remote_identity: Some(remote_identity),
             our_identity_private: Some(our_identity_private),
@@ -146,14 +150,17 @@ impl DoubleRatchetSession {
         meta: &EnvelopeMeta,
         aad: &[u8],
     ) -> Result<Vec<u8>, ProtocolError> {
+        let key_id = (meta.previous_chain, meta.message_number);
+        if self.seen_messages.contains(&key_id) {
+            return Err(ProtocolError::MessageKeyReused);
+        }
+
         // Check skipped keys first
-        if let Some(key) = self
-            .skipped_keys
-            .remove(&(meta.message_number, meta.previous_chain))
-        {
+        if let Some(key) = self.skipped_keys.remove(&key_id) {
             let plaintext =
                 aegis_crypto::aead::decrypt(&SymmetricKey(key), ciphertext_with_nonce, aad)
                     .map_err(|e| ProtocolError::Session(e.to_string()))?;
+            self.seen_messages.insert(key_id);
             return Ok(plaintext);
         }
 
@@ -176,6 +183,8 @@ impl DoubleRatchetSession {
             self.receiving.remote_ratchet_public = Some(meta.sender_ephemeral);
         }
 
+        self.skip_message_keys_until(meta.message_number)?;
+
         // Derive and consume message key from receiving chain
         let chain_key_bytes = self
             .receiving
@@ -188,8 +197,35 @@ impl DoubleRatchetSession {
 
         let plaintext = aegis_crypto::aead::decrypt(&msg_key, ciphertext_with_nonce, aad)
             .map_err(|e| ProtocolError::Session(e.to_string()))?;
+        self.seen_messages.insert(key_id);
 
         Ok(plaintext)
+    }
+
+    fn skip_message_keys_until(&mut self, target_message_number: u64) -> Result<(), ProtocolError> {
+        if target_message_number < self.receiving.message_number {
+            return Err(ProtocolError::RatchetKeyNotFound(target_message_number));
+        }
+        if target_message_number - self.receiving.message_number > MAX_SKIPPED_MESSAGE_KEYS {
+            return Err(ProtocolError::RatchetLookaheadExceeded);
+        }
+
+        while self.receiving.message_number < target_message_number {
+            let chain_key_bytes = self
+                .receiving
+                .chain_key
+                .ok_or_else(|| ProtocolError::Session("no receiving chain key".into()))?;
+            let (msg_key, next_chain_key) = derive_message_key(chain_key_bytes)
+                .map_err(|e| ProtocolError::Session(e.to_string()))?;
+            self.skipped_keys.insert(
+                (self.receiving.chain_counter, self.receiving.message_number),
+                *msg_key.as_bytes(),
+            );
+            self.receiving.chain_key = Some(next_chain_key);
+            self.receiving.message_number += 1;
+        }
+
+        Ok(())
     }
 
     fn perform_dh_ratchet(&mut self, their_new_ephemeral: [u8; 32]) -> Result<(), ProtocolError> {
@@ -242,6 +278,7 @@ impl DoubleRatchetSession {
         self.sending.message_number = 0;
 
         self.root_key = Some(*new_root.as_bytes());
+        self.skipped_keys.clear();
 
         Ok(())
     }
@@ -372,5 +409,89 @@ mod tests {
             alice.decrypt_next(&ct4, &m4, aad).unwrap(),
             b"Bob's second message"
         );
+    }
+
+    #[test]
+    fn test_out_of_order_messages_use_skipped_keys() {
+        let shared = [7u8; 32];
+        let alice_id = [1u8; 32];
+        let bob_id = [2u8; 32];
+        let aad = b"out-of-order";
+
+        let mut alice = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            bob_id,
+            alice_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+        let mut bob = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            alice_id,
+            bob_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+
+        let (ct0, m0) = alice.encrypt_next(b"first", aad).unwrap();
+        let (ct1, m1) = alice.encrypt_next(b"second", aad).unwrap();
+
+        assert_eq!(bob.decrypt_next(&ct1, &m1, aad).unwrap(), b"second");
+        assert_eq!(bob.decrypt_next(&ct0, &m0, aad).unwrap(), b"first");
+    }
+
+    #[test]
+    fn test_replay_message_is_rejected() {
+        let shared = [8u8; 32];
+        let alice_id = [1u8; 32];
+        let bob_id = [2u8; 32];
+        let aad = b"replay";
+
+        let mut alice = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            bob_id,
+            alice_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+        let mut bob = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            alice_id,
+            bob_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+
+        let (ct, meta) = alice.encrypt_next(b"once", aad).unwrap();
+        assert_eq!(bob.decrypt_next(&ct, &meta, aad).unwrap(), b"once");
+        assert!(matches!(
+            bob.decrypt_next(&ct, &meta, aad),
+            Err(ProtocolError::MessageKeyReused)
+        ));
+    }
+
+    #[test]
+    fn test_too_far_ahead_message_is_rejected() {
+        let shared = [9u8; 32];
+        let alice_id = [1u8; 32];
+        let bob_id = [2u8; 32];
+        let mut bob = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            alice_id,
+            bob_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+        let meta = EnvelopeMeta {
+            message_number: MAX_SKIPPED_MESSAGE_KEYS + 1,
+            previous_chain: 0,
+            sender_ephemeral: [3u8; 32],
+            key_version: 1,
+        };
+
+        assert!(matches!(
+            bob.decrypt_next(b"invalid", &meta, b"aad"),
+            Err(ProtocolError::RatchetLookaheadExceeded)
+        ));
     }
 }

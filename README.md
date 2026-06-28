@@ -6,17 +6,17 @@ Built for the Raspberry Pi as your personal relay server. Works on Linux, macOS,
 
 ## Security Properties
 
-| Property | Implementation |
+| Property | Status | Implementation |
 |---|---|
-| End-to-end encryption | XChaCha20-Poly1305 AEAD |
-| Post-quantum KEM | Planned; ML-KEM-768 placeholder currently fails closed |
-| Forward secrecy | Double Ratchet (Signal-style) |
-| Key derivation | HKDF-SHA512 + Argon2id |
-| Digital signatures | Ed25519 |
-| Server trust model | Untrusted relay (zero-knowledge) |
-| Metadata minimization | Pairwise anonymous IDs, no global identity |
-| Local storage | Encrypted vault (AES-256-GCM) |
-| Hardware key support | Design documented; not implemented in the MVP |
+| End-to-end message encryption | Partial | Desktop invite/import/send/poll flow encrypts paired 1:1 messages before relay upload |
+| Post-quantum KEM | Partial | ML-KEM-768 is integrated behind a provider trait; downgrade handling and external review are required before production claims |
+| Forward secrecy | Partial | Double Ratchet session state has per-message keys, replay rejection, and skipped-key handling |
+| Key derivation | Implemented | HKDF-SHA512 + Argon2id |
+| Digital signatures | Implemented | Ed25519 |
+| Server trust model | Implemented for relay contents | Relay accepts only public key material and ciphertext envelopes |
+| Metadata minimization | Partial | Hashed queue IDs and TTL envelopes; traffic correlation remains out of scope for MVP |
+| Local storage | Implemented for vault records | Encrypted local vault; full chat history schema still pending |
+| Hardware key support | Partial | Desktop can record hardware-unlock enrollment intent; FIDO2 PRF unlock is not implemented yet |
 
 See [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md) for full details.
 
@@ -111,10 +111,10 @@ AEGIS_BIND=0.0.0.0:8080 ./target/release/aegis-server
 - `ed25519-dalek` → Ed25519 signing
 - `argon2` → Argon2id password hashing
 - `hkdf` → HKDF-SHA512 key derivation
-- ML-KEM-768 placeholders (swap in `cryml-kem` when available)
+- `ml-kem` → ML-KEM-768 behind the `KemProvider` abstraction
 
 ### aegis-protocol
-- PQXDH-inspired initial handshake (hybrid X25519 + post-quantum KEM)
+- PQXDH-inspired initial handshake (hybrid X25519 + ML-KEM-768 when recipient publishes a PQ prekey)
 - Double Ratchet session with symmetric initialization
 - Envelope serialization with metadata minimization
 - Safety numbers for contact verification
@@ -128,11 +128,12 @@ AEGIS_BIND=0.0.0.0:8080 ./target/release/aegis-server
 ### aegis-transport
 - Minimal server API client
 - Account/queue/envelope management
+- Optional proxy routing for Tor SOCKS or I2P HTTP proxy mode
 - Constant-time token comparison
 
 ### aegis-server
-- In-memory state (strict mode: no persistence)
-- Ephemeral relay: queues auto-expire
+- In-memory strict mode plus TTL persistent JSON store when `AEGIS_RELAY_STORE_PATH` is set
+- Ephemeral relay: queues/envelopes auto-expire
 - Token capability system (read/write separation)
 - Rate limiting ready
 
@@ -194,11 +195,12 @@ cargo fmt --all
 
 This is an MVP. Known limitations:
 - No MLS group messaging (1:1 only)
-- No offline message delivery
+- Group UI/API uses per-recipient E2EE fanout; no MLS ratchet tree yet
+- Offline delivery requires `ttl_persistent` relay mode and `AEGIS_RELAY_STORE_PATH`
 - No multi-device key sync
 - No perfect forward secrecy for the relay server itself
-- ML-KEM-768 uses placeholder (swap for real implementation)
-- No Tor/I2P mode yet
+- ML-KEM-768 is integrated but still requires production review and downgrade UX
+- Tor/I2P proxy routing is available, but traffic-correlation protection is not complete
 
 See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for full list.
 

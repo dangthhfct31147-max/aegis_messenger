@@ -81,9 +81,9 @@ Argon2id parameters (`m`, `t`, `p`) must be calibrated to the target device. Hig
 
 ### 2.2 ML-KEM-768 Library Maturity
 
-The `kyber` Rust crate implementing ML-KEM-768 is relatively new. NIST standardized ML-KEM in 2024, and the Rust ecosystem is catching up.
+The RustCrypto `ml-kem` crate is integrated behind the Aegis `KemProvider` abstraction. NIST standardized ML-KEM in 2024, and the Rust ecosystem is still maturing.
 
-**Mitigation:** We use the `kyber` crate with a fallback to X25519-only if the library is unavailable or marked unstable. The crypto agility design allows swapping the underlying library without protocol changes.
+**Mitigation:** Aegis can swap the provider without protocol-wide rewrites. Production builds must retain downgrade detection, test vectors, and clear user warnings if a recipient has no PQ prekey.
 
 ### 2.3 FIDO2 hmac-secret Extension Availability
 
@@ -103,11 +103,11 @@ MLS-style group messaging with ratchet tree has complexity O(log n) per member f
 
 **Mitigation:** MVP groups are limited to practical sizes (<50 members). Large broadcast groups are out of scope.
 
-### 2.6 Offline Message Delivery in Strict Mode
+### 2.6 Offline Message Delivery in Strict Ephemeral Mode
 
-In strict relay mode, messages sent to offline recipients are dropped. The sender must retry when the recipient comes online.
+In strict ephemeral relay mode, messages sent to offline recipients may be unavailable after process restart or TTL cleanup. The sender may need to retry when the recipient comes online.
 
-**Mitigation:** Ephemeral offline mode (configurable TTL) is available for users who prioritize availability over maximum privacy.
+**Mitigation:** TTL persistent mode stores only encrypted envelopes and hashed capability metadata until expiry for users who prioritize availability over maximum ephemerality.
 
 ---
 
@@ -126,10 +126,20 @@ The following features are planned for post-MVP releases and are explicitly out 
 | Read receipts (server-visible) | Metadata; privacy degradation |
 | Typing indicators (server-visible) | Metadata; privacy degradation |
 | "Last seen" / online status | Metadata; privacy degradation |
-| Group admin controls | Adds complexity; MVP is simple 1:1 + basic groups |
+| MLS group ratchet tree | Current desktop group messaging is per-recipient fanout, not RFC 9420 MLS |
 | Contact transfer between devices | Requires secure offline transfer protocol |
 | Key escrow / account recovery server | Single point of failure; against design principle |
 | Mixnet transport | Significant trade-offs; future version |
+
+### 3.1 Desktop MVP Feature Boundaries
+
+The desktop app now has an invite/import/send/poll flow for 1:1 encrypted messages. The contact secret is derived client-side from X25519 identity keys exchanged through the invite. This is useful for local demos and paired-device workflows, but it is not a full PQXDH responder implementation yet.
+
+Hardware unlock enrollment currently records local intent and display metadata. It does not yet use FIDO2 hmac-secret/PRF to derive or unwrap the vault key.
+
+Group messaging currently sends one encrypted envelope per member using the member's 1:1 session. This keeps the relay blind to plaintext, but it does not provide MLS tree-based group forward secrecy or efficient membership changes.
+
+Tor/I2P mode configures the transport HTTP client to use a proxy. It does not add cover traffic, padding beyond existing envelope buckets, mixnet routing, or global traffic-correlation resistance.
 
 ---
 

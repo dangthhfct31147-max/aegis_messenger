@@ -1,7 +1,7 @@
 //! Server API routes
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
@@ -22,6 +22,8 @@ const DEFAULT_ENVELOPE_TTL_SECONDS: i64 = 3_600;
 const MAX_QUEUE_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_ENVELOPE_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_ENVELOPE_BYTES: usize = 1024 * 1024;
+const MAX_PUBLIC_KEY_BYTES: usize = 2 * 1024;
+const ED25519_SIGNATURE_BYTES: usize = 64;
 
 fn current_bucket() -> String {
     let now = Utc::now();
@@ -64,6 +66,7 @@ async fn create_account(
         .write()
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .insert(account_id, account);
+    state.save_to_disk().map_err(ServerError::Internal)?;
 
     Ok(Json(AccountResponse {
         account_id: base64_url_encode(&account_id),
@@ -114,6 +117,7 @@ async fn create_queue(
         .write()
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .insert(hash_token(&queue_id), queue);
+    state.save_to_disk().map_err(ServerError::Internal)?;
 
     Ok(Json(QueueResponse {
         queue_id: base64_url_encode(&queue_id),
@@ -143,6 +147,7 @@ async fn upload_envelope(
     headers: HeaderMap,
     Json(body): Json<UploadEnvelope>,
 ) -> Result<impl IntoResponse, ServerError> {
+    cleanup_expired(&state)?;
     let envelope_id = aegis_crypto::random::random_32bytes();
     let bucket = current_bucket();
 
@@ -159,11 +164,11 @@ async fn upload_envelope(
         return Err(ServerError::BadRequest("invalid padded size bucket".into()));
     }
 
-    let ttl = validate_ttl(
-        body.ttl_seconds,
-        DEFAULT_ENVELOPE_TTL_SECONDS,
-        MAX_ENVELOPE_TTL_SECONDS,
-    )?;
+    let default_ttl = match state.relay_mode {
+        RelayMode::StrictEphemeral => DEFAULT_ENVELOPE_TTL_SECONDS,
+        RelayMode::TtlPersistent { ttl_seconds } => ttl_seconds,
+    };
+    let ttl = validate_ttl(body.ttl_seconds, default_ttl, MAX_ENVELOPE_TTL_SECONDS)?;
     let expires_at = Utc::now() + chrono::Duration::seconds(ttl);
 
     let envelope = crate::state::Envelope {
@@ -190,6 +195,7 @@ async fn upload_envelope(
         .entry(queue_id_hash)
         .or_insert_with(Vec::new)
         .push(env_id_copy);
+    state.save_to_disk().map_err(ServerError::Internal)?;
 
     Ok(Json(EnvelopeResponse {
         envelope_id: base64_url_encode(&envelope_id),
@@ -209,6 +215,7 @@ async fn poll_envelopes(
     headers: HeaderMap,
     Query(params): Query<PollParams>,
 ) -> Result<impl IntoResponse, ServerError> {
+    cleanup_expired(&state)?;
     let queue_id_bytes = decode_base64_url_32(&params.queue, "queue id")?;
     let queue_id_hash = hash_token(&queue_id_bytes);
     authorize_queue_capability(&state, &headers, &queue_id_hash, Capability::Read)?;
@@ -248,6 +255,7 @@ async fn ack_envelope(
     headers: HeaderMap,
     Path(envelope_id_b64): Path<String>,
 ) -> Result<StatusCode, ServerError> {
+    cleanup_expired(&state)?;
     let env_id = decode_base64_url_32(&envelope_id_b64, "envelope id")?;
 
     let queue_id_hash = {
@@ -268,8 +276,92 @@ async fn ack_envelope(
         .write()
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .remove(&env_id);
+    state.save_to_disk().map_err(ServerError::Internal)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterDevice {
+    account_id: Option<String>,
+    device_id: Option<String>,
+    public_id_key: String,
+    signed_prekey_public: String,
+    pq_prekey_public: Option<String>,
+    signature: String,
+    key_version: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeviceResponse {
+    account_id: String,
+    device_id: String,
+    created_at: String,
+}
+
+async fn register_device(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterDevice>,
+) -> Result<impl IntoResponse, ServerError> {
+    let account_id = match body.account_id {
+        Some(account_id) => decode_base64_url_32(&account_id, "account id")?,
+        None => aegis_crypto::random::random_32bytes(),
+    };
+    let device_id = match body.device_id {
+        Some(device_id) => decode_base64_url_32(&device_id, "device id")?,
+        None => aegis_crypto::random::random_32bytes(),
+    };
+
+    let public_id_key = decode_public_material(&body.public_id_key, "public_id_key")?;
+    let signed_prekey_public =
+        decode_public_material(&body.signed_prekey_public, "signed_prekey_public")?;
+    let pq_prekey_public = body
+        .pq_prekey_public
+        .as_deref()
+        .map(|value| decode_public_material(value, "pq_prekey_public"))
+        .transpose()?;
+    let signature = base64_url_decode(&body.signature)
+        .map_err(|_| ServerError::BadRequest("invalid signature base64".into()))?;
+    if signature.len() != ED25519_SIGNATURE_BYTES {
+        return Err(ServerError::BadRequest("invalid signature length".into()));
+    }
+
+    let bucket = current_bucket();
+    let device = crate::state::Device {
+        device_id,
+        account_id,
+        public_id_key,
+        signed_prekey_public,
+        pq_prekey_public,
+        signature,
+        key_version: body.key_version.unwrap_or(1),
+        created_at_bucket: bucket.clone(),
+        revoked_at: None,
+    };
+
+    let mut devices = state
+        .devices
+        .write()
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    if devices.contains_key(&device_id) {
+        return Err(ServerError::Conflict("device already registered".into()));
+    }
+    devices.insert(device_id, device);
+    drop(devices);
+    state.save_to_disk().map_err(ServerError::Internal)?;
+
+    Ok(Json(DeviceResponse {
+        account_id: base64_url_encode(&account_id),
+        device_id: base64_url_encode(&device_id),
+        created_at: bucket,
+    }))
+}
+
+async fn upload_prekey_bundle(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterDevice>,
+) -> Result<impl IntoResponse, ServerError> {
+    register_device(State(state), Json(body)).await
 }
 
 async fn get_prekey_bundle(
@@ -284,11 +376,21 @@ async fn get_prekey_bundle(
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     let device = devices.get(&device_id).ok_or(ServerError::NotFound)?;
+    if device.revoked_at.is_some() {
+        return Err(ServerError::NotFound);
+    }
 
     Ok(Json(serde_json::json!({
+        "account_id": base64_url_encode(&device.account_id),
+        "device_id": base64_url_encode(&device.device_id),
+        "public_id_key": base64_url_encode(&device.public_id_key),
         "signed_prekey_public": base64_url_encode(&device.signed_prekey_public),
         "pq_prekey_public": device.pq_prekey_public.as_ref().map(|p| base64_url_encode(p)),
         "signature": base64_url_encode(&device.signature),
+        "key_version": device.key_version,
+        "cipher_suite": 0x0001u16,
+        "one_time_prekey": null,
+        "created_at_bucket": device.created_at_bucket,
     })))
 }
 
@@ -316,6 +418,15 @@ fn decode_base64_url_32(data: &str, label: &str) -> Result<[u8; 32], ServerError
     bytes
         .try_into()
         .map_err(|_| ServerError::BadRequest(format!("invalid {label} length")))
+}
+
+fn decode_public_material(data: &str, label: &str) -> Result<Vec<u8>, ServerError> {
+    let bytes = base64_url_decode(data)
+        .map_err(|_| ServerError::BadRequest(format!("invalid {label} base64")))?;
+    if bytes.is_empty() || bytes.len() > MAX_PUBLIC_KEY_BYTES {
+        return Err(ServerError::BadRequest(format!("invalid {label} length")));
+    }
+    Ok(bytes)
 }
 
 fn validate_ttl(
@@ -377,17 +488,74 @@ fn authorize_queue_capability(
     Ok(())
 }
 
+fn cleanup_expired(state: &AppState) -> Result<(), ServerError> {
+    let now = Utc::now();
+    let expired_ids: Vec<[u8; 32]> = {
+        let envelopes = state
+            .envelopes
+            .read()
+            .map_err(|e| ServerError::Internal(e.to_string()))?;
+        envelopes
+            .iter()
+            .filter_map(|(id, env)| (env.expires_at < now).then_some(*id))
+            .collect()
+    };
+
+    if expired_ids.is_empty() {
+        return Ok(());
+    }
+
+    {
+        let mut envelopes = state
+            .envelopes
+            .write()
+            .map_err(|e| ServerError::Internal(e.to_string()))?;
+        for id in &expired_ids {
+            envelopes.remove(id);
+        }
+    }
+
+    let mut queue_envelopes = state
+        .queue_envelopes
+        .write()
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    for ids in queue_envelopes.values_mut() {
+        ids.retain(|id| !expired_ids.contains(id));
+    }
+    drop(queue_envelopes);
+    state.save_to_disk().map_err(ServerError::Internal)?;
+
+    Ok(())
+}
+
 pub fn build_router(relay_mode: RelayMode) -> Router {
     let state: AppState = std::sync::Arc::new(ServerState::new(relay_mode));
+    build_router_with_state(state)
+}
 
+pub fn build_router_with_persistence(
+    relay_mode: RelayMode,
+    persistence_path: std::path::PathBuf,
+) -> Router {
+    let state: AppState = std::sync::Arc::new(ServerState::new_with_persistence(
+        relay_mode,
+        persistence_path,
+    ));
+    build_router_with_state(state)
+}
+
+fn build_router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/accounts", post(create_account))
+        .route("/v1/devices/register", post(register_device))
+        .route("/v1/prekeys/upload", post(upload_prekey_bundle))
         .route("/v1/queues", post(create_queue))
         .route("/v1/envelopes", post(upload_envelope))
         .route("/v1/envelopes", get(poll_envelopes))
         .route("/v1/envelopes/{envelope_id}", delete(ack_envelope))
         .route("/v1/prekeys/{device_id}", get(get_prekey_bundle))
+        .layer(DefaultBodyLimit::max(MAX_ENVELOPE_BYTES + 4096))
         .with_state(state)
 }
 
@@ -439,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_and_poll_require_matching_queue_capabilities() {
-        let app = build_router(RelayMode::Strict);
+        let app = build_router(RelayMode::StrictEphemeral);
         let queue = create_queue(app.clone()).await;
         let queue_id = queue["queue_id"].as_str().unwrap();
         let read_token = queue["read_token"].as_str().unwrap();
@@ -514,7 +682,7 @@ mod tests {
 
     #[tokio::test]
     async fn short_ids_return_bad_request_instead_of_panicking() {
-        let app = build_router(RelayMode::Strict);
+        let app = build_router(RelayMode::StrictEphemeral);
         let response = app
             .oneshot(
                 Request::builder()
@@ -526,5 +694,135 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn register_device_then_fetch_prekey_bundle() {
+        let app = build_router(RelayMode::StrictEphemeral);
+        let body = json!({
+            "public_id_key": base64_url_encode(&[1u8; 32]),
+            "signed_prekey_public": base64_url_encode(&[2u8; 32]),
+            "pq_prekey_public": base64_url_encode(&[3u8; 1184]),
+            "signature": base64_url_encode(&[4u8; 64]),
+            "key_version": 7
+        });
+        let response = send_json(app.clone(), "POST", "/v1/devices/register", None, body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let device_id = payload["device_id"].as_str().unwrap();
+
+        let fetched = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/prekeys/{device_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fetched.status(), StatusCode::OK);
+        let body = to_bytes(fetched.into_body(), usize::MAX).await.unwrap();
+        let prekey: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(prekey["public_id_key"], base64_url_encode(&[1u8; 32]));
+        assert_eq!(
+            prekey["signed_prekey_public"],
+            base64_url_encode(&[2u8; 32])
+        );
+        assert_eq!(prekey["key_version"], 7);
+    }
+
+    #[tokio::test]
+    async fn expired_envelopes_are_removed_on_poll() {
+        let app = build_router(RelayMode::TtlPersistent { ttl_seconds: 1 });
+        let queue = create_queue(app.clone()).await;
+        let queue_id = queue["queue_id"].as_str().unwrap();
+        let read_token = queue["read_token"].as_str().unwrap();
+        let write_token = queue["write_token"].as_str().unwrap();
+
+        let uploaded = send_json(
+            app.clone(),
+            "POST",
+            "/v1/envelopes",
+            Some(write_token),
+            json!({
+                "queue_id_hash": queue_id,
+                "ciphertext_blob": base64_url_encode(b"expires"),
+                "padded_size_bucket": 64,
+                "ttl_seconds": 1
+            }),
+        )
+        .await;
+        assert_eq!(uploaded.status(), StatusCode::OK);
+
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        let poll = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/envelopes?queue={queue_id}"))
+                    .header("authorization", format!("Bearer {read_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(poll.status(), StatusCode::OK);
+        let body = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert!(payload["envelopes"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ttl_persistent_mode_survives_restart_with_unexpired_ciphertext() {
+        let path = std::env::temp_dir().join(format!(
+            "aegis-relay-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mode = RelayMode::TtlPersistent { ttl_seconds: 60 };
+        let app = build_router_with_persistence(mode, path.clone());
+        let queue = create_queue(app.clone()).await;
+        let queue_id = queue["queue_id"].as_str().unwrap().to_string();
+        let read_token = queue["read_token"].as_str().unwrap().to_string();
+        let write_token = queue["write_token"].as_str().unwrap().to_string();
+
+        let uploaded = send_json(
+            app,
+            "POST",
+            "/v1/envelopes",
+            Some(&write_token),
+            json!({
+                "queue_id_hash": queue_id,
+                "ciphertext_blob": base64_url_encode(b"persisted-ciphertext"),
+                "padded_size_bucket": 64,
+                "ttl_seconds": 60
+            }),
+        )
+        .await;
+        assert_eq!(uploaded.status(), StatusCode::OK);
+
+        let restarted = build_router_with_persistence(mode, path.clone());
+        let poll = restarted
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/envelopes?queue={queue_id}"))
+                    .header("authorization", format!("Bearer {read_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(poll.status(), StatusCode::OK);
+        let body = to_bytes(poll.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["envelopes"].as_array().unwrap().len(), 1);
+
+        std::fs::remove_file(path).ok();
     }
 }

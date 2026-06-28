@@ -20,7 +20,21 @@ async fn main() {
 
     tracing::info!(%addr, "Aegis relay server starting");
 
-    let app = aegis_server::routes::build_router(aegis_server::state::RelayMode::Strict);
+    let relay_mode = match std::env::var("AEGIS_RELAY_MODE").as_deref() {
+        Ok("ttl_persistent") => aegis_server::state::RelayMode::TtlPersistent {
+            ttl_seconds: std::env::var("AEGIS_RELAY_TTL_SECONDS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3_600),
+        },
+        _ => aegis_server::state::RelayMode::StrictEphemeral,
+    };
+
+    let app = if let Ok(path) = std::env::var("AEGIS_RELAY_STORE_PATH") {
+        aegis_server::routes::build_router_with_persistence(relay_mode, path.into())
+    } else {
+        aegis_server::routes::build_router(relay_mode)
+    };
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
