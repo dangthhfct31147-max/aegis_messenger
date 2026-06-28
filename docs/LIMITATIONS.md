@@ -97,11 +97,11 @@ In MVP, new device enrollment requires scanning a QR code from an existing enrol
 
 **Limitation:** Users who lose all enrolled devices and all recovery phrases are permanently locked out. There is no server-side key escrow, by design.
 
-### 2.5 Group Messaging Scalability
+### 2.5 Group Messaging Scope
 
-MLS-style group messaging with ratchet tree has complexity O(log n) per member for group key updates. For very large groups (100+ members), this may introduce latency on membership changes.
+Desktop MVP group messaging uses per-recipient E2EE fanout over each member's 1:1 contact secret. The sender uploads one encrypted envelope per member.
 
-**Mitigation:** MVP groups are limited to practical sizes (<50 members). Large broadcast groups are out of scope.
+**Limitation:** This is not RFC 9420 MLS. It does not provide MLS tree-based group forward secrecy, efficient membership changes, or cryptographic group state commits. Large groups and advanced group admin controls remain out of scope until an audited MLS implementation is integrated.
 
 ### 2.6 Offline Message Delivery in Strict Ephemeral Mode
 

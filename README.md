@@ -194,9 +194,8 @@ cargo fmt --all
 ## Limitations
 
 This is an MVP. Known limitations:
-- No MLS group messaging (1:1 only)
-- Group UI/API uses per-recipient E2EE fanout; no MLS ratchet tree yet
-- Offline delivery requires `ttl_persistent` relay mode and `AEGIS_RELAY_STORE_PATH`
+- Group messaging is available only as per-recipient E2EE fanout; no RFC 9420 MLS ratchet tree yet
+- Offline delivery is available only when the relay runs in `ttl_persistent` mode with `AEGIS_RELAY_STORE_PATH`
 - No multi-device key sync
 - No perfect forward secrecy for the relay server itself
 - ML-KEM-768 is integrated but still requires production review and downgrade UX
