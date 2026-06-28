@@ -10,6 +10,7 @@ repository = "https://github.com/aegis-messenger/aegis"
 
 [dependencies]
 aegis-crypto = { path = "../aegis-crypto" }
+base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"

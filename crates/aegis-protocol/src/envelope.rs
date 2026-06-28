@@ -63,15 +63,23 @@ impl Envelope {
     }
 
     pub fn deserialize(data: &[u8]) -> Result<Self, crate::error::ProtocolError> {
-        if data.len() < 4 { return Err(crate::error::ProtocolError::Envelope("too short".into())); }
+        if data.len() < 4 {
+            return Err(crate::error::ProtocolError::Envelope("too short".into()));
+        }
         let header_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        if data.len() < 4 + header_len { return Err(crate::error::ProtocolError::Envelope("header truncated".into())); }
+        if data.len() < 4 + header_len {
+            return Err(crate::error::ProtocolError::Envelope(
+                "header truncated".into(),
+            ));
+        }
         let header = EnvelopeHeader::from_bytes(&data[4..4 + header_len])?;
         let ciphertext = data[4 + header_len..].to_vec();
         Ok(Self { header, ciphertext })
     }
 
-    pub fn aad(&self) -> Vec<u8> { self.header.to_bytes() }
+    pub fn aad(&self) -> Vec<u8> {
+        self.header.to_bytes()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

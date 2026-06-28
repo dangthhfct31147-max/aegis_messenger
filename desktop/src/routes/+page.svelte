@@ -27,7 +27,7 @@
     try {
       const status = await vaultStatus();
       vaultState.set(status);
-      if (!status.is_locked) {
+      if (!status.isLocked) {
         currentView.set('conversations');
       }
 
@@ -39,7 +39,7 @@
         serverHealth.set({ status: 'disconnected', version: 'unknown', timestamp: '' });
       }
     } catch (e) {
-      error = e.toString();
+      error = e instanceof Error ? e.message : String(e);
     }
   });
 
@@ -120,7 +120,6 @@
               bind:value={passphrase}
               placeholder="Passphrase"
               autocomplete="current-password"
-              autofocus
             />
           </div>
 

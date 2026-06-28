@@ -9,15 +9,19 @@ pub struct AppVault {
     is_unlocked: bool,
 }
 
+impl Default for AppVault {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppVault {
     pub fn new() -> Self {
         let _vault_path = Self::vault_path();
-        let vault = aegis_vault::AegisVault::open()
-            .unwrap_or_else(|_| {
-                aegis_vault::AegisVault::open_with_config(
-                    aegis_vault::VaultConfig::default()
-                ).expect("failed to initialize vault")
-            });
+        let vault = aegis_vault::AegisVault::open().unwrap_or_else(|_| {
+            aegis_vault::AegisVault::open_with_config(aegis_vault::VaultConfig::default())
+                .expect("failed to initialize vault")
+        });
         Self {
             vault,
             is_unlocked: false,
@@ -36,11 +40,7 @@ impl AppVault {
         crate::VaultStatus {
             is_locked: !self.is_unlocked,
             auto_lock_seconds: 300,
-            records_count: if self.is_unlocked {
-                0
-            } else {
-                0
-            },
+            records_count: 0,
         }
     }
 

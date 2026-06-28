@@ -7,6 +7,9 @@ export async function vaultStatus() {
   return invoke('vault_status');
 }
 
+/**
+ * @param {string} passphrase
+ */
 export async function vaultUnlock(passphrase) {
   return invoke('vault_unlock', { passphrase });
 }
@@ -15,6 +18,9 @@ export async function vaultLock() {
   return invoke('vault_lock');
 }
 
+/**
+ * @param {string} passphrase
+ */
 export async function vaultCreate(passphrase) {
   return invoke('vault_create', { passphrase });
 }
@@ -33,6 +39,9 @@ export async function serverHealth() {
   return invoke('server_health');
 }
 
+/**
+ * @param {string} url
+ */
 export async function setServerUrl(url) {
   return invoke('set_server_url', { url });
 }

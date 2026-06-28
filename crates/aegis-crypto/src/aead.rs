@@ -25,8 +25,15 @@ impl AeadCipher {
             .expect("random_vec always returns correct length");
         let nonce = GenericArray::from_slice(&nonce_bytes);
 
-        let ciphertext = self.cipher
-            .encrypt(nonce, chacha20poly1305::aead::Payload { msg: plaintext, aad })
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                nonce,
+                chacha20poly1305::aead::Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
             .map_err(|_| CryptoError::AeadEncryptFailed)?;
 
         let mut result = Vec::with_capacity(24 + ciphertext.len());
@@ -44,7 +51,13 @@ impl AeadCipher {
         let ciphertext = &ciphertext_with_nonce[24..];
 
         self.cipher
-            .decrypt(nonce, chacha20poly1305::aead::Payload { msg: ciphertext, aad })
+            .decrypt(
+                nonce,
+                chacha20poly1305::aead::Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
             .map_err(|_| CryptoError::AeadDecryptFailed)
     }
 }
@@ -75,8 +88,12 @@ mod tests {
     #[test]
     fn test_aead_wrong_aad_fails() {
         let key = SymmetricKey::generate();
-        let ciphertext = AeadCipher::new(&key).seal(b"Secret", b"correct-aad").unwrap();
-        assert!(AeadCipher::new(&key).open(&ciphertext, b"wrong-aad").is_err());
+        let ciphertext = AeadCipher::new(&key)
+            .seal(b"Secret", b"correct-aad")
+            .unwrap();
+        assert!(AeadCipher::new(&key)
+            .open(&ciphertext, b"wrong-aad")
+            .is_err());
     }
 
     #[test]

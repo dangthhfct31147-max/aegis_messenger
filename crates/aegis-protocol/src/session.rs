@@ -1,11 +1,10 @@
 //! Double Ratchet session state
 
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
 use aegis_crypto::{
-    SymmetricKey, X25519PrivateKey, X25519PublicKey, CipherSuite,
-    kdf::hkdf_cat, kem::x25519_dh,
+    kdf::hkdf_cat, kem::x25519_dh, CipherSuite, SymmetricKey, X25519PrivateKey, X25519PublicKey,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::error::ProtocolError;
 
@@ -27,7 +26,10 @@ pub struct DhKeyPair {
 impl DhKeyPair {
     pub fn generate() -> Self {
         let (private, public) = X25519PrivateKey::generate();
-        Self { private: private.0, public: *public.as_bytes() }
+        Self {
+            private: private.0,
+            public: *public.as_bytes(),
+        }
     }
 }
 
@@ -62,16 +64,17 @@ impl DoubleRatchetSession {
     ) -> Self {
         let salt = b"Aegis-DoubleRatchet-v1";
         let (root_key, chain_key) = hkdf_cat(shared_secret, salt, b"initial-chain")
-            .map_err(|e| ProtocolError::Session(e.to_string())).unwrap();
+            .map_err(|e| ProtocolError::Session(e.to_string()))
+            .unwrap();
 
         let root_key_bytes = *root_key.as_bytes();
         let chain_key_bytes = *chain_key.as_bytes();
 
         let mut associated_data = [0u8; 32];
-        use sha2::{Sha512, Digest};
+        use sha2::{Digest, Sha512};
         let mut hasher = Sha512::new();
-        hasher.update(&remote_identity);
-        hasher.update(&our_identity_private);
+        hasher.update(remote_identity);
+        hasher.update(our_identity_private);
         let combined_aad = hasher.finalize();
         associated_data.copy_from_slice(&combined_aad[..32]);
 
@@ -105,8 +108,14 @@ impl DoubleRatchetSession {
         }
     }
 
-    pub fn encrypt_next(&mut self, plaintext: &[u8], aad: &[u8]) -> Result<(Vec<u8>, EnvelopeMeta), ProtocolError> {
-        let chain_key_bytes = self.sending.chain_key
+    pub fn encrypt_next(
+        &mut self,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<(Vec<u8>, EnvelopeMeta), ProtocolError> {
+        let chain_key_bytes = self
+            .sending
+            .chain_key
             .ok_or_else(|| ProtocolError::Session("no sending chain key".into()))?;
         let (message_key, next_chain_key) = derive_message_key(chain_key_bytes)
             .map_err(|e| ProtocolError::Session(e.to_string()))?;
@@ -117,8 +126,12 @@ impl DoubleRatchetSession {
         let meta = EnvelopeMeta {
             message_number: self.sending.message_number,
             previous_chain: self.sending.chain_counter,
-            sender_ephemeral: self.sending.dh_key_pair.as_ref()
-                .map(|kp| kp.public).unwrap_or([0u8; 32]),
+            sender_ephemeral: self
+                .sending
+                .dh_key_pair
+                .as_ref()
+                .map(|kp| kp.public)
+                .unwrap_or([0u8; 32]),
             key_version: self.key_version,
         };
 
@@ -134,9 +147,13 @@ impl DoubleRatchetSession {
         aad: &[u8],
     ) -> Result<Vec<u8>, ProtocolError> {
         // Check skipped keys first
-        if let Some(key) = self.skipped_keys.remove(&(meta.message_number, meta.previous_chain)) {
-            let plaintext = aegis_crypto::aead::decrypt(&SymmetricKey(key), ciphertext_with_nonce, aad)
-                .map_err(|e| ProtocolError::Session(e.to_string()))?;
+        if let Some(key) = self
+            .skipped_keys
+            .remove(&(meta.message_number, meta.previous_chain))
+        {
+            let plaintext =
+                aegis_crypto::aead::decrypt(&SymmetricKey(key), ciphertext_with_nonce, aad)
+                    .map_err(|e| ProtocolError::Session(e.to_string()))?;
             return Ok(plaintext);
         }
 
@@ -160,7 +177,9 @@ impl DoubleRatchetSession {
         }
 
         // Derive and consume message key from receiving chain
-        let chain_key_bytes = self.receiving.chain_key
+        let chain_key_bytes = self
+            .receiving
+            .chain_key
             .ok_or_else(|| ProtocolError::Session("no receiving chain key".into()))?;
         let (msg_key, next_chain_key) = derive_message_key(chain_key_bytes)
             .map_err(|e| ProtocolError::Session(e.to_string()))?;
@@ -177,12 +196,20 @@ impl DoubleRatchetSession {
         let salt = b"Aegis-DoubleRatchet-v1";
 
         // Step 1: DH(our_current, their_new) → receiving chain
-        let our_private = self.sending.dh_key_pair.as_ref()
+        let our_private = self
+            .sending
+            .dh_key_pair
+            .as_ref()
             .ok_or_else(|| ProtocolError::Session("no DH key to ratchet".into()))?
             .private;
-        let dh1 = x25519_dh(&X25519PrivateKey(our_private), &X25519PublicKey(their_new_ephemeral));
+        let dh1 = x25519_dh(
+            &X25519PrivateKey(our_private),
+            &X25519PublicKey(their_new_ephemeral),
+        );
 
-        let rk = self.root_key.ok_or_else(|| ProtocolError::Session("no root key".into()))?;
+        let rk = self
+            .root_key
+            .ok_or_else(|| ProtocolError::Session("no root key".into()))?;
         let mut combined1 = rk;
         for (i, byte) in dh1.iter().enumerate() {
             combined1[i] ^= byte;
@@ -192,7 +219,10 @@ impl DoubleRatchetSession {
 
         // Step 2: DH(our_new, their_new) → sending chain
         let our_new = DhKeyPair::generate();
-        let dh2 = x25519_dh(&X25519PrivateKey(our_new.private), &X25519PublicKey(their_new_ephemeral));
+        let dh2 = x25519_dh(
+            &X25519PrivateKey(our_new.private),
+            &X25519PublicKey(their_new_ephemeral),
+        );
         let mut combined2 = *new_root.as_bytes();
         for (i, byte) in dh2.iter().enumerate() {
             combined2[i] ^= byte;
@@ -217,7 +247,9 @@ impl DoubleRatchetSession {
     }
 }
 
-fn derive_message_key(chain_key: [u8; 32]) -> Result<(SymmetricKey, [u8; 32]), aegis_crypto::CryptoError> {
+fn derive_message_key(
+    chain_key: [u8; 32],
+) -> Result<(SymmetricKey, [u8; 32]), aegis_crypto::CryptoError> {
     let (mk, nck) = hkdf_cat(&chain_key, b"AegisRatchet", b"aegis-msg-chain")?;
     Ok((mk, *nck.as_bytes()))
 }
@@ -242,8 +274,20 @@ mod tests {
         let alice_id = [1u8; 32];
         let bob_id = [2u8; 32];
 
-        let alice = DoubleRatchetSession::from_shared_secret(&shared, bob_id, alice_id, bob_id, CipherSuite::Aegis1);
-        let bob = DoubleRatchetSession::from_shared_secret(&shared, alice_id, bob_id, bob_id, CipherSuite::Aegis1);
+        let alice = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            bob_id,
+            alice_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+        let bob = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            alice_id,
+            bob_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
 
         // Both parties have identical initial chain keys
         assert_eq!(alice.sending.chain_key, bob.receiving.chain_key);
@@ -256,8 +300,20 @@ mod tests {
         let alice_id = [1u8; 32];
         let bob_id = [2u8; 32];
 
-        let mut alice = DoubleRatchetSession::from_shared_secret(&shared, bob_id, alice_id, bob_id, CipherSuite::Aegis1);
-        let mut bob = DoubleRatchetSession::from_shared_secret(&shared, alice_id, bob_id, bob_id, CipherSuite::Aegis1);
+        let mut alice = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            bob_id,
+            alice_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+        let mut bob = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            alice_id,
+            bob_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
 
         let plaintext = b"Hello, Aegis!";
         let aad = b"test-aad";
@@ -275,8 +331,20 @@ mod tests {
         let alice_id = [4u8; 32];
         let bob_id = [5u8; 32];
 
-        let mut alice = DoubleRatchetSession::from_shared_secret(&shared, bob_id, alice_id, bob_id, CipherSuite::Aegis1);
-        let mut bob = DoubleRatchetSession::from_shared_secret(&shared, alice_id, bob_id, bob_id, CipherSuite::Aegis1);
+        let mut alice = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            bob_id,
+            alice_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
+        let mut bob = DoubleRatchetSession::from_shared_secret(
+            &shared,
+            alice_id,
+            bob_id,
+            bob_id,
+            CipherSuite::Aegis1,
+        );
 
         let aad = b"bidirectional";
 
@@ -286,14 +354,23 @@ mod tests {
 
         // Bob replies — DH ratchet on both sides
         let (ct2, m2) = bob.encrypt_next(b"Reply from Bob", aad).unwrap();
-        assert_eq!(alice.decrypt_next(&ct2, &m2, aad).unwrap(), b"Reply from Bob");
+        assert_eq!(
+            alice.decrypt_next(&ct2, &m2, aad).unwrap(),
+            b"Reply from Bob"
+        );
 
         // Alice sends again — new DH ratchet
         let (ct3, m3) = alice.encrypt_next(b"Alice's second message", aad).unwrap();
-        assert_eq!(bob.decrypt_next(&ct3, &m3, aad).unwrap(), b"Alice's second message");
+        assert_eq!(
+            bob.decrypt_next(&ct3, &m3, aad).unwrap(),
+            b"Alice's second message"
+        );
 
         // Bob sends again
         let (ct4, m4) = bob.encrypt_next(b"Bob's second message", aad).unwrap();
-        assert_eq!(alice.decrypt_next(&ct4, &m4, aad).unwrap(), b"Bob's second message");
+        assert_eq!(
+            alice.decrypt_next(&ct4, &m4, aad).unwrap(),
+            b"Bob's second message"
+        );
     }
 }

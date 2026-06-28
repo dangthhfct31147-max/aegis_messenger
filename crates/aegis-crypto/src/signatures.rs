@@ -3,7 +3,10 @@
 use crate::{CryptoError, Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature};
 
 /// Sign a message with an Ed25519 private key
-pub fn sign(message: &[u8], private_key: &Ed25519PrivateKey) -> Result<Ed25519Signature, CryptoError> {
+pub fn sign(
+    message: &[u8],
+    private_key: &Ed25519PrivateKey,
+) -> Result<Ed25519Signature, CryptoError> {
     private_key.sign(message)
 }
 
@@ -13,8 +16,8 @@ pub fn verify(
     signature: &Ed25519Signature,
     public_key: &Ed25519PublicKey,
 ) -> Result<(), CryptoError> {
-    use ed25519_dalek::VerifyingKey;
     use ed25519_dalek::Signature as DalekSignature;
+    use ed25519_dalek::VerifyingKey;
     let vk = VerifyingKey::from_bytes(&public_key.0)
         .map_err(|_| CryptoError::Ed25519InvalidPublicKey)?;
     let dalek_sig = DalekSignature::from_bytes(&signature.0);
@@ -29,7 +32,7 @@ pub fn sign_prekey_bundle(
     one_time_prekey: Option<&[u8]>,
     key_version: u32,
 ) -> Result<Ed25519Signature, CryptoError> {
-    use sha2::{Sha512, Digest};
+    use sha2::{Digest, Sha512};
 
     let mut data = Vec::with_capacity(32 + 32 + 4);
     data.extend_from_slice(signed_prekey);
@@ -53,7 +56,7 @@ pub fn verify_prekey_bundle_signature(
     signature: &Ed25519Signature,
     identity_public: &Ed25519PublicKey,
 ) -> Result<(), CryptoError> {
-    use sha2::{Sha512, Digest};
+    use sha2::{Digest, Sha512};
 
     let mut data = Vec::with_capacity(32 + 32 + 4);
     data.extend_from_slice(signed_prekey);

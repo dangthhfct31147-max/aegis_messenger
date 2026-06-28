@@ -3,7 +3,7 @@
 use hkdf::Hkdf;
 use sha2::Sha512;
 
-use crate::{CryptoError, Argon2Params, Argon2Key, SymmetricKey};
+use crate::{Argon2Key, Argon2Params, CryptoError, SymmetricKey};
 
 /// Derive a key from a passphrase using Argon2id.
 pub fn derive_argon2(
@@ -13,17 +13,18 @@ pub fn derive_argon2(
 ) -> Result<Argon2Key, CryptoError> {
     use argon2::{Argon2, Params as Argon2LibParams};
 
-    let argon2_params = Argon2LibParams::new(
-        params.m,
-        params.t,
-        params.p,
-        Some(params.dklen),
-    ).map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
+    let argon2_params = Argon2LibParams::new(params.m, params.t, params.p, Some(params.dklen))
+        .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
 
-    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, argon2_params);
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        argon2_params,
+    );
 
     let mut output = vec![0u8; params.dklen];
-    argon2.hash_password_into(password, salt, &mut output)
+    argon2
+        .hash_password_into(password, salt, &mut output)
         .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
 
     Ok(Argon2Key(output))

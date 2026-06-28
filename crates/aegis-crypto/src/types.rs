@@ -13,13 +13,21 @@ impl SymmetricKey {
         Self(bytes)
     }
 
-    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
-impl AsRef<[u8]> for SymmetricKey { fn as_ref(&self) -> &[u8] { &self.0 } }
+impl AsRef<[u8]> for SymmetricKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 impl Drop for SymmetricKey {
-    fn drop(&mut self) { self.0.zeroize(); }
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
 }
 
 /// X25519 public key (32 bytes)
@@ -27,12 +35,17 @@ impl Drop for SymmetricKey {
 pub struct X25519PublicKey(pub [u8; 32]);
 
 impl X25519PublicKey {
-    pub fn from_bytes(bytes: [u8; 32]) -> Self { Self(bytes) }
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
     pub fn from_base64(input: &str) -> Result<Self, crate::CryptoError> {
         use base64::Engine;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(input).map_err(|_| crate::CryptoError::Base64DecodeFailed)?;
-        if bytes.len() != 32 { return Err(crate::CryptoError::DecodingFailed); }
+            .decode(input)
+            .map_err(|_| crate::CryptoError::Base64DecodeFailed)?;
+        if bytes.len() != 32 {
+            return Err(crate::CryptoError::DecodingFailed);
+        }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
         Ok(Self(key))
@@ -41,10 +54,16 @@ impl X25519PublicKey {
         use base64::Engine;
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.0)
     }
-    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
-impl From<[u8; 32]> for X25519PublicKey { fn from(bytes: [u8; 32]) -> Self { Self(bytes) } }
+impl From<[u8; 32]> for X25519PublicKey {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
 
 /// X25519 private key (32 bytes)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +71,7 @@ pub struct X25519PrivateKey(pub [u8; 32]);
 
 impl X25519PrivateKey {
     pub fn generate() -> (Self, X25519PublicKey) {
-        use x25519_dalek::{StaticSecret, PublicKey};
+        use x25519_dalek::{PublicKey, StaticSecret};
         let secret = StaticSecret::random_from_rng(crate::random::system_rng());
         let public = PublicKey::from(&secret);
         let mut sk = [0u8; 32];
@@ -61,8 +80,11 @@ impl X25519PrivateKey {
         pk.copy_from_slice(public.as_bytes());
         (Self(sk), X25519PublicKey(pk))
     }
-    pub fn diffie_hellman(&self, peer_public: &X25519PublicKey) -> Result<SymmetricKey, crate::CryptoError> {
-        use x25519_dalek::{StaticSecret, PublicKey};
+    pub fn diffie_hellman(
+        &self,
+        peer_public: &X25519PublicKey,
+    ) -> Result<SymmetricKey, crate::CryptoError> {
+        use x25519_dalek::{PublicKey, StaticSecret};
         let secret = StaticSecret::from(self.0);
         let peer = PublicKey::from(peer_public.0);
         let shared = secret.diffie_hellman(&peer);
@@ -72,7 +94,11 @@ impl X25519PrivateKey {
     }
 }
 
-impl Drop for X25519PrivateKey { fn drop(&mut self) { self.0.zeroize(); } }
+impl Drop for X25519PrivateKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 /// Ed25519 public key (32 bytes)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,8 +108,11 @@ impl Ed25519PublicKey {
     pub fn from_base64(input: &str) -> Result<Self, crate::CryptoError> {
         use base64::Engine;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(input).map_err(|_| crate::CryptoError::Base64DecodeFailed)?;
-        if bytes.len() != 32 { return Err(crate::CryptoError::DecodingFailed); }
+            .decode(input)
+            .map_err(|_| crate::CryptoError::Base64DecodeFailed)?;
+        if bytes.len() != 32 {
+            return Err(crate::CryptoError::DecodingFailed);
+        }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
         Ok(Self(key))
@@ -92,8 +121,12 @@ impl Ed25519PublicKey {
         use base64::Engine;
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.0)
     }
-    pub fn verify(&self, message: &[u8], signature: &Ed25519Signature) -> Result<(), crate::CryptoError> {
-        use ed25519_dalek::{VerifyingKey, Verifier, Signature as DalekSig};
+    pub fn verify(
+        &self,
+        message: &[u8],
+        signature: &Ed25519Signature,
+    ) -> Result<(), crate::CryptoError> {
+        use ed25519_dalek::{Signature as DalekSig, Verifier, VerifyingKey};
         let vk = VerifyingKey::from_bytes(&self.0)
             .map_err(|_| crate::CryptoError::Ed25519InvalidPublicKey)?;
         let sig = DalekSig::from_bytes(&signature.0);
@@ -119,7 +152,7 @@ impl Ed25519PrivateKey {
         (Self(sk), Ed25519PublicKey(pk))
     }
     pub fn sign(&self, message: &[u8]) -> Result<Ed25519Signature, crate::CryptoError> {
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
         let sk: [u8; 32] = self.0[..32].try_into().unwrap();
         let signing = SigningKey::from_bytes(&sk);
         let sig = signing.sign(message);
@@ -127,7 +160,11 @@ impl Ed25519PrivateKey {
     }
 }
 
-impl Drop for Ed25519PrivateKey { fn drop(&mut self) { self.0.zeroize(); } }
+impl Drop for Ed25519PrivateKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 /// Ed25519 signature (64 bytes)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,8 +174,11 @@ impl Ed25519Signature {
     pub fn from_base64(input: &str) -> Result<Self, crate::CryptoError> {
         use base64::Engine;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(input).map_err(|_| crate::CryptoError::Base64DecodeFailed)?;
-        if bytes.len() != 64 { return Err(crate::CryptoError::DecodingFailed); }
+            .decode(input)
+            .map_err(|_| crate::CryptoError::Base64DecodeFailed)?;
+        if bytes.len() != 64 {
+            return Err(crate::CryptoError::DecodingFailed);
+        }
         let mut sig = [0u8; 64];
         sig.copy_from_slice(&bytes);
         Ok(Self(sig))
@@ -151,20 +191,42 @@ impl Ed25519Signature {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Argon2Params {
-    pub m: u32, pub t: u32, pub p: u32, pub dklen: usize,
+    pub m: u32,
+    pub t: u32,
+    pub p: u32,
+    pub dklen: usize,
 }
 
 impl Default for Argon2Params {
-    fn default() -> Self { Self { m: 2u32.pow(21), t: 3, p: 4, dklen: 32 } }
+    fn default() -> Self {
+        Self {
+            m: 2u32.pow(21),
+            t: 3,
+            p: 4,
+            dklen: 32,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Argon2Key(pub Vec<u8>);
 
-impl Argon2Key { pub fn as_bytes(&self) -> &[u8] { &self.0 } }
-impl AsRef<[u8]> for Argon2Key { fn as_ref(&self) -> &[u8] { &self.0 } }
+impl Argon2Key {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl AsRef<[u8]> for Argon2Key {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
 
-impl Drop for Argon2Key { fn drop(&mut self) { self.0.zeroize(); } }
+impl Drop for Argon2Key {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PrekeyBundle {
@@ -176,11 +238,12 @@ pub struct PrekeyBundle {
     pub key_version: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(u16)]
-pub enum CipherSuite { Aegis1 = 0x0001 }
-
-impl Default for CipherSuite { fn default() -> Self { Self::Aegis1 } }
+pub enum CipherSuite {
+    #[default]
+    Aegis1 = 0x0001,
+}
 
 pub const PROTOCOL_VERSION: u16 = 0x0001;
 
@@ -189,7 +252,7 @@ pub const PROTOCOL_VERSION: u16 = 0x0001;
 impl serde::Serialize for SymmetricKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use base64::Engine;
-        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.0);
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.0);
         serde::Serialize::serialize(&b64, s)
     }
 }
@@ -199,8 +262,11 @@ impl<'de> serde::Deserialize<'de> for SymmetricKey {
         use base64::Engine;
         let b64 = String::deserialize(d)?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&b64).map_err(serde::de::Error::custom)?;
-        if bytes.len() != 32 { return Err(serde::de::Error::custom("invalid length")); }
+            .decode(&b64)
+            .map_err(serde::de::Error::custom)?;
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom("invalid length"));
+        }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
         Ok(Self(key))
@@ -222,7 +288,9 @@ impl<'de> serde::Deserialize<'de> for X25519PublicKey {
 impl serde::Serialize for X25519PrivateKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use base64::Engine;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.0).serialize(s)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(self.0)
+            .serialize(s)
     }
 }
 
@@ -231,8 +299,11 @@ impl<'de> serde::Deserialize<'de> for X25519PrivateKey {
         use base64::Engine;
         let b64 = String::deserialize(d)?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&b64).map_err(serde::de::Error::custom)?;
-        if bytes.len() != 32 { return Err(serde::de::Error::custom("invalid length")); }
+            .decode(&b64)
+            .map_err(serde::de::Error::custom)?;
+        if bytes.len() != 32 {
+            return Err(serde::de::Error::custom("invalid length"));
+        }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
         Ok(Self(key))
@@ -254,7 +325,9 @@ impl<'de> serde::Deserialize<'de> for Ed25519PublicKey {
 impl serde::Serialize for Ed25519PrivateKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use base64::Engine;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.0).serialize(s)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(self.0)
+            .serialize(s)
     }
 }
 
@@ -263,8 +336,11 @@ impl<'de> serde::Deserialize<'de> for Ed25519PrivateKey {
         use base64::Engine;
         let b64 = String::deserialize(d)?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&b64).map_err(serde::de::Error::custom)?;
-        if bytes.len() != 64 { return Err(serde::de::Error::custom("invalid length")); }
+            .decode(&b64)
+            .map_err(serde::de::Error::custom)?;
+        if bytes.len() != 64 {
+            return Err(serde::de::Error::custom("invalid length"));
+        }
         let mut key = [0u8; 64];
         key.copy_from_slice(&bytes);
         Ok(Self(key))
@@ -314,16 +390,28 @@ impl serde::Serialize for Argon2Params {
 impl<'de> serde::Deserialize<'de> for Argon2Params {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(serde::Deserialize)]
-        struct Raw { m: u32, t: u32, p: u32, dklen: usize }
+        struct Raw {
+            m: u32,
+            t: u32,
+            p: u32,
+            dklen: usize,
+        }
         let raw = Raw::deserialize(d)?;
-        Ok(Self { m: raw.m, t: raw.t, p: raw.p, dklen: raw.dklen })
+        Ok(Self {
+            m: raw.m,
+            t: raw.t,
+            p: raw.p,
+            dklen: raw.dklen,
+        })
     }
 }
 
 impl serde::Serialize for Argon2Key {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use base64::Engine;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.0).serialize(s)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&self.0)
+            .serialize(s)
     }
 }
 
@@ -332,7 +420,8 @@ impl<'de> serde::Deserialize<'de> for Argon2Key {
         use base64::Engine;
         let b64 = String::deserialize(d)?;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&b64).map_err(serde::de::Error::custom)?;
+            .decode(&b64)
+            .map_err(serde::de::Error::custom)?;
         Ok(Self(bytes))
     }
 }

@@ -1,6 +1,6 @@
 # Aegis Messenger
 
-**Ultra-secure, privacy-first, cross-platform end-to-end encrypted messenger.**
+**Security-focused, privacy-first, cross-platform end-to-end encrypted messenger MVP.**
 
 Built for the Raspberry Pi as your personal relay server. Works on Linux, macOS, and Windows.
 
@@ -9,14 +9,14 @@ Built for the Raspberry Pi as your personal relay server. Works on Linux, macOS,
 | Property | Implementation |
 |---|---|
 | End-to-end encryption | XChaCha20-Poly1305 AEAD |
-| Post-quantum ready | Hybrid X25519 + ML-KEM-768 (Kyber) |
+| Post-quantum KEM | Planned; ML-KEM-768 placeholder currently fails closed |
 | Forward secrecy | Double Ratchet (Signal-style) |
 | Key derivation | HKDF-SHA512 + Argon2id |
 | Digital signatures | Ed25519 |
 | Server trust model | Untrusted relay (zero-knowledge) |
 | Metadata minimization | Pairwise anonymous IDs, no global identity |
 | Local storage | Encrypted vault (AES-256-GCM) |
-| Hardware key support | FIDO2/WebAuthn (hmac-secret) |
+| Hardware key support | Design documented; not implemented in the MVP |
 
 See [docs/SECURITY_ARCHITECTURE.md](docs/SECURITY_ARCHITECTURE.md) for full details.
 

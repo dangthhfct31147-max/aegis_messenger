@@ -7,7 +7,7 @@
 //!
 //! All message encryption/decryption happens CLIENT-SIDE. Server never holds keys.
 
-use sha2::{Sha512, Digest};
+use sha2::{Digest, Sha512};
 
 /// Hash a token (queue ID, capability token) using SHA-512.
 /// Server NEVER stores raw tokens — only hashes.

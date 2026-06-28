@@ -36,8 +36,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "shortDescription": "Ultra-secure end-to-end encrypted messenger",
-    "longDescription": "Aegis Messenger is a privacy-first, end-to-end encrypted chat application with post-quantum ready cryptography, metadata minimization, and hardware key support."
+    "shortDescription": "Security-focused end-to-end encrypted messenger MVP",
+    "longDescription": "Aegis Messenger is a privacy-first, end-to-end encrypted chat application MVP with metadata minimization and a documented path for post-quantum and hardware-key support."
   },
   "plugins": {}
 }

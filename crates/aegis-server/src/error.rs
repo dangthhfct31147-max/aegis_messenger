@@ -1,12 +1,12 @@
 //! Server error types
 
-use thiserror::Error;
 use axum::{
-    response::{IntoResponse, Response},
     http::StatusCode,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::Serialize;
+use thiserror::Error;
 
 #[derive(Serialize)]
 struct ErrorBody {
@@ -58,7 +58,10 @@ impl IntoResponse for ServerError {
             ServerError::BadRequest(s) => (StatusCode::BAD_REQUEST, s.clone()),
             ServerError::Conflict(s) => (StatusCode::CONFLICT, s.clone()),
             ServerError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
-            ServerError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into()),
+            ServerError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error".into(),
+            ),
             ServerError::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             ServerError::InvalidToken => (StatusCode::FORBIDDEN, self.to_string()),
             ServerError::QueueExpired => (StatusCode::GONE, self.to_string()),

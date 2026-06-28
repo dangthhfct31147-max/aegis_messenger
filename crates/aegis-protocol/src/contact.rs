@@ -1,8 +1,8 @@
 //! Contact management
 
+use aegis_crypto::CipherSuite;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use aegis_crypto::CipherSuite;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contact {
@@ -51,9 +51,13 @@ impl Contact {
 }
 
 pub fn compute_safety_number(our_identity: &[u8; 32], their_identity: &[u8; 32]) -> u64 {
-    use sha2::{Sha512, Digest};
+    use sha2::{Digest, Sha512};
     let mut hasher = Sha512::new();
-    let (a, b) = if our_identity < their_identity { (our_identity, their_identity) } else { (their_identity, our_identity) };
+    let (a, b) = if our_identity < their_identity {
+        (our_identity, their_identity)
+    } else {
+        (their_identity, our_identity)
+    };
     hasher.update(a);
     hasher.update(b);
     let hash = hasher.finalize();

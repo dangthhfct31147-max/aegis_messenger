@@ -3,10 +3,10 @@
 //! In production, replace with PostgreSQL. The structures here mirror
 //! the production schema so the swap is straightforward.
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
-use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
 
 /// In-memory envelope storage
 #[derive(Debug, Clone)]
