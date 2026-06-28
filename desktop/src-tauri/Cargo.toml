@@ -1,0 +1,43 @@
+[package]
+name = "aegis-desktop"
+version = "0.1.0"
+description = "Aegis Messenger — Secure Cross-Platform Chat"
+authors = ["Aegis Team"]
+edition = "2021"
+
+[lib]
+name = "aegis_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aegis-crypto = { path = "../../crates/aegis-crypto" }
+aegis-protocol = { path = "../../crates/aegis-protocol" }
+aegis-vault = { path = "../../crates/aegis-vault" }
+aegis-transport = { path = "../../crates/aegis-transport" }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+directories = "5"
+reqwest = { version = "0.12", features = ["json"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-notification = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-os = "2"
+tauri-plugin-clipboard-manager = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+devtools = ["tauri/devtools"]

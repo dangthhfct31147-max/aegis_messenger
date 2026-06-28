@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aegis-crypto",
+    "crates/aegis-protocol",
+    "crates/aegis-vault",
+    "crates/aegis-transport",
+    "crates/aegis-server",
+    "desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Aegis Team"]
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
+
+[profile.dev]
+split-debuginfo = "unpacked"

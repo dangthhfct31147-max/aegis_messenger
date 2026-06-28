@@ -1,0 +1,167 @@
+# Aegis Messenger — Limitations
+
+**Version:** 0.1.0-draft  
+**Last Updated:** 2026-06-25
+
+This document honestly describes what Aegis Messenger does NOT protect against, what is intentionally out of scope, and known trade-offs. Users and reviewers should read this carefully.
+
+---
+
+## 1. Fundamental Limitations
+
+### 1.1 Compromised Operating System
+
+If an attacker has root/kernel-level access to the device's operating system, no software-only design can protect:
+
+- Plaintext messages visible on screen
+- Keystrokes entered via standard OS input APIs
+- Memory contents of the Aegis process
+- Clipboard contents
+- Files stored in the app's data directory
+
+**What Aegis does:** Uses OS-level sandboxing (macOS sandbox, Windows AppContainer, Linux Flatpak) to limit damage from other apps. But this does not protect against a privileged attacker on the same machine.
+
+**What Aegis cannot do:** Prevent a kernel-level keylogger from capturing the passphrase, or screen capture software from recording the UI while a message is displayed.
+
+### 1.2 Hardware Key Limitations
+
+Hardware keys protect:
+- Vault unlock (prevents offline passphrase brute force)
+- Server login (prevents credential theft)
+
+Hardware keys do NOT protect:
+- Messages visible on screen after unlock
+- RAM scraping while the vault is unlocked
+- Screen recording / screenshot by OS-level malware
+- Keylogging at the OS level
+- Clipboard contents
+
+### 1.3 Metadata Privacy
+
+Aegis significantly reduces metadata exposure but cannot achieve mathematical perfect metadata privacy without:
+
+- **Mixnet:** Routing messages through multiple relays with cover traffic
+- **Cover traffic:** Sending fake messages to hide real traffic patterns
+- **Artificial latency:** Adding random delays to break timing correlation
+- **Constant-rate padding:** Sending at a fixed rate regardless of user activity
+
+These trade-offs (usability, bandwidth, battery) are not acceptable for the MVP. Aegis provides:
+- Hashed queue IDs (server cannot see raw routing address)
+- TTL deletion of envelopes
+- Padded message sizes
+- No plaintext conversation or contact storage on server
+
+But a global passive observer can still:
+- See that a specific IP address is connecting to the Aegis relay
+- See connection timing patterns
+- Correlate traffic volume with message send/receive events
+- Infer that two users are communicating (over time, through traffic correlation)
+
+### 1.4 Traffic Correlation
+
+Even with Tor, the first hop (client → entry guard) passes through the user's ISP, which can observe that the user is connecting to a Tor entry node. The last hop (exit node → Aegis relay) can observe traffic to the relay. A sufficiently powerful adversary (country-level) can correlate entry and exit traffic.
+
+### 1.5 Forward Secrecy Scope
+
+Forward secrecy protects past messages if a key is compromised **in the future**. It does NOT protect past messages if:
+
+- The key was already compromised before the messages were sent
+- The device was cloned or key material was exfiltrated before the messages were encrypted
+- A court order compels the user to disclose the passphrase (duress PIN helps with deniability but is not cryptographically perfect)
+
+---
+
+## 2. Known Technical Limitations
+
+### 2.1 Argon2id Calibration
+
+Argon2id parameters (`m`, `t`, `p`) must be calibrated to the target device. High-end desktop with 32 GB RAM: `m=2^21` (2 GiB) may take 3+ seconds. Low-end mobile with 2 GB RAM: `m=2^21` may cause OOM.
+
+**Mitigation:** Aegis will ship with adaptive calibration that adjusts `m` to target ~1 second unlock time, with a minimum floor that prevents OOM. Users can configure manual parameters.
+
+### 2.2 ML-KEM-768 Library Maturity
+
+The `kyber` Rust crate implementing ML-KEM-768 is relatively new. NIST standardized ML-KEM in 2024, and the Rust ecosystem is catching up.
+
+**Mitigation:** We use the `kyber` crate with a fallback to X25519-only if the library is unavailable or marked unstable. The crypto agility design allows swapping the underlying library without protocol changes.
+
+### 2.3 FIDO2 hmac-secret Extension Availability
+
+Not all browsers and hardware keys support the FIDO2 hmac-secret extension (CTAP2.1). Chrome on desktop supports it; Safari on iOS/macOS has partial support; Firefox support depends on OS-level implementation.
+
+**Mitigation:** Hardware key vault protection is optional. Users without hmac-secret support can use passphrase-only vault protection, hardware key server login, or wait for platform support to improve.
+
+### 2.4 Multi-Device Key Distribution
+
+In MVP, new device enrollment requires scanning a QR code from an existing enrolled device. This requires both devices to be in proximity at enrollment time.
+
+**Limitation:** Users who lose all enrolled devices and all recovery phrases are permanently locked out. There is no server-side key escrow, by design.
+
+### 2.5 Group Messaging Scalability
+
+MLS-style group messaging with ratchet tree has complexity O(log n) per member for group key updates. For very large groups (100+ members), this may introduce latency on membership changes.
+
+**Mitigation:** MVP groups are limited to practical sizes (<50 members). Large broadcast groups are out of scope.
+
+### 2.6 Offline Message Delivery in Strict Mode
+
+In strict relay mode, messages sent to offline recipients are dropped. The sender must retry when the recipient comes online.
+
+**Mitigation:** Ephemeral offline mode (configurable TTL) is available for users who prioritize availability over maximum privacy.
+
+---
+
+## 3. Out of Scope for MVP
+
+The following features are planned for post-MVP releases and are explicitly out of scope for the initial release:
+
+| Feature | Reason |
+|---|---|
+| Mobile apps (iOS/Android) | Desktop-first; mobile requires separate security review |
+| Voice/video calls | Complex attack surface; separate protocol needed |
+| Server-side search | Would require plaintext indexing — incompatible with security model |
+| Message reactions / emoji | Non-critical feature; adds metadata |
+| Public channels | Not aligned with private messenger model |
+| Bots / integrations | Security attack surface; deferred |
+| Read receipts (server-visible) | Metadata; privacy degradation |
+| Typing indicators (server-visible) | Metadata; privacy degradation |
+| "Last seen" / online status | Metadata; privacy degradation |
+| Group admin controls | Adds complexity; MVP is simple 1:1 + basic groups |
+| Contact transfer between devices | Requires secure offline transfer protocol |
+| Key escrow / account recovery server | Single point of failure; against design principle |
+| Mixnet transport | Significant trade-offs; future version |
+
+---
+
+## 4. What Aegis Does NOT Claim to Be
+
+- **Not a replacement for Signal.** Aegis prioritizes metadata minimization and post-quantum readiness differently. Signal has more mature group messaging.
+- **Not a replacement for Signal's sealed sender.** Aegis does not implement sender hiding in the MVP.
+- **Not a "private" messenger in the sense of hiding from the user's own OS.** Aegis runs as a standard desktop application, not a hidden process.
+- **Not resistant to a coercive attacker with full physical access and the user's cooperation.** Duress PIN provides plausible deniability, not cryptographic deniability.
+- **Not audited by a third party (yet).** The cryptographic design is reviewed internally against this document. External audit is planned before production release.
+- **Not providing legal guarantees.** This is security software. Use it as one layer of your personal security posture, not as the only layer.
+
+---
+
+## 5. Security Warnings to Display to Users
+
+The following warnings should be shown to users at appropriate points:
+
+1. **On vault creation:** "Your recovery phrase is the ONLY way to recover your vault if you lose your hardware keys and passphrase. Write it down. Store it offline. Do NOT take a screenshot. Aegis never stores your recovery phrase."
+
+2. **On hardware key enrollment:** "Enroll at least one backup hardware key. If you lose your only hardware key and do not have a recovery phrase, your vault is permanently inaccessible."
+
+3. **On duress PIN setup:** "The duress PIN opens a decoy vault. The decoy vault should look convincing. Do not put obviously fake data in it. Advanced forensic analysis may still detect the presence of a decoy vault. Aegis cannot guarantee perfect plausible deniability."
+
+4. **On Tor mode:** "Using Tor hides your IP address from the Aegis relay server, but your ISP can see you're using Tor. The Tor network itself may observe traffic to/from the Aegis relay. For maximum privacy, use Tor in a country with strong privacy laws."
+
+5. **On key change:** "A contact's security key has changed. This could mean they reinstalled the app, got a new device, or an attacker intercepted your connection. Verify the new safety number in person if possible."
+
+---
+
+## 6. Revision History
+
+| Version | Date | Changes |
+|---|---|---|
+| 0.1.0-draft | 2026-06-25 | Initial draft |

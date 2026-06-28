@@ -1,0 +1,44 @@
+# Rust / Cargo
+/target/
+**/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# Tauri / Desktop
+desktop/build/
+desktop/.svelte-kit/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/node_modules/
+
+# Secrets / local config
+.env
+.env.local
+*.pem
+*.key
+secrets/
+
+# Logs
+*.log
+logs/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Local build artifacts
+*.deb
+*.rpm
+*.AppImage
+*.dmg
+*.msi
+*.app
