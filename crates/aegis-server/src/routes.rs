@@ -24,6 +24,7 @@ const MAX_ENVELOPE_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_ENVELOPE_BYTES: usize = 1024 * 1024;
 const MAX_PUBLIC_KEY_BYTES: usize = 2 * 1024;
 const ED25519_SIGNATURE_BYTES: usize = 64;
+const MAX_COVER_BYTES: usize = 64 * 1024;
 
 fn current_bucket() -> String {
     let now = Utc::now();
@@ -402,6 +403,21 @@ async fn health() -> impl IntoResponse {
     }))
 }
 
+#[derive(Debug, Deserialize)]
+struct CoverTraffic {
+    padding: String,
+    padded_size_bucket: i32,
+}
+
+async fn cover_traffic(Json(body): Json<CoverTraffic>) -> Result<StatusCode, ServerError> {
+    let padding = base64_url_decode(&body.padding)
+        .map_err(|_| ServerError::BadRequest("invalid cover padding base64".into()))?;
+    if padding.len() > MAX_COVER_BYTES || body.padded_size_bucket < 0 {
+        return Err(ServerError::PayloadTooLarge);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn base64_url_encode(data: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }
@@ -551,6 +567,7 @@ fn build_router_with_state(state: AppState) -> Router {
         .route("/v1/devices/register", post(register_device))
         .route("/v1/prekeys/upload", post(upload_prekey_bundle))
         .route("/v1/queues", post(create_queue))
+        .route("/v1/cover", post(cover_traffic))
         .route("/v1/envelopes", post(upload_envelope))
         .route("/v1/envelopes", get(poll_envelopes))
         .route("/v1/envelopes/{envelope_id}", delete(ack_envelope))
@@ -824,5 +841,22 @@ mod tests {
         assert_eq!(payload["envelopes"].as_array().unwrap().len(), 1);
 
         std::fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn cover_traffic_accepts_padded_dummy_payload_without_storage() {
+        let app = build_router(RelayMode::StrictEphemeral);
+        let response = send_json(
+            app,
+            "POST",
+            "/v1/cover",
+            None,
+            json!({
+                "padding": base64_url_encode(&[9u8; 1024]),
+                "padded_size_bucket": 1024
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
     }
 }

@@ -83,7 +83,7 @@ Argon2id parameters (`m`, `t`, `p`) must be calibrated to the target device. Hig
 
 The RustCrypto `ml-kem` crate is integrated behind the Aegis `KemProvider` abstraction. NIST standardized ML-KEM in 2024, and the Rust ecosystem is still maturing.
 
-**Mitigation:** Aegis can swap the provider without protocol-wide rewrites. Production builds must retain downgrade detection, test vectors, and clear user warnings if a recipient has no PQ prekey.
+**Mitigation:** Aegis can swap the provider without protocol-wide rewrites. Desktop contact import validates that an invite contains an encapsulatable ML-KEM-768 prekey and fails closed if it does not. Production builds still require external review, stable test vectors, and downgrade UX for non-desktop protocol paths.
 
 ### 2.3 FIDO2 hmac-secret Extension Availability
 
@@ -93,9 +93,9 @@ Not all browsers and hardware keys support the FIDO2 hmac-secret extension (CTAP
 
 ### 2.4 Multi-Device Key Distribution
 
-In MVP, new device enrollment requires scanning a QR code from an existing enrolled device. This requires both devices to be in proximity at enrollment time.
+The relay has device registration/prekey foundations, but the desktop client does not yet implement encrypted device-link approval or private state transfer between a user's devices.
 
-**Limitation:** Users who lose all enrolled devices and all recovery phrases are permanently locked out. There is no server-side key escrow, by design.
+**Limitation:** Aegis should not sync private keys through the relay in plaintext or via server escrow. A future device-link flow must transfer device state encrypted end-to-end from an approved existing device. Users who lose all enrolled devices and all recovery phrases are permanently locked out, by design.
 
 ### 2.5 Group Messaging Scope
 
@@ -103,11 +103,11 @@ Desktop MVP group messaging uses per-recipient E2EE fanout over each member's 1:
 
 **Limitation:** This is not RFC 9420 MLS. It does not provide MLS tree-based group forward secrecy, efficient membership changes, or cryptographic group state commits. Large groups and advanced group admin controls remain out of scope until an audited MLS implementation is integrated.
 
-### 2.6 Offline Message Delivery in Strict Ephemeral Mode
+### 2.6 Offline Message Delivery Modes
 
-In strict ephemeral relay mode, messages sent to offline recipients may be unavailable after process restart or TTL cleanup. The sender may need to retry when the recipient comes online.
+TTL persistent relay mode is now the default and stores only encrypted envelopes plus hashed capability metadata in a local JSON store. Strict ephemeral mode remains available with `AEGIS_RELAY_MODE=strict_ephemeral`.
 
-**Mitigation:** TTL persistent mode stores only encrypted envelopes and hashed capability metadata until expiry for users who prioritize availability over maximum ephemerality.
+**Limitation:** Strict ephemeral mode can still drop offline messages after process restart or TTL cleanup. TTL persistence improves availability, but it is not durable database replication and still depends on the relay host's local storage.
 
 ---
 
@@ -140,6 +140,8 @@ Hardware unlock enrollment currently records local intent and display metadata. 
 Group messaging currently sends one encrypted envelope per member using the member's 1:1 session. This keeps the relay blind to plaintext, but it does not provide MLS tree-based group forward secrecy or efficient membership changes.
 
 Tor/I2P mode configures the transport HTTP client to use a proxy. It does not add cover traffic, padding beyond existing envelope buckets, mixnet routing, or global traffic-correlation resistance.
+
+Envelope payloads are padded before relay upload, and the relay exposes a cover-traffic endpoint for padded dummy traffic. These reduce simple size and activity signals, but they do not provide mixnet-level anonymity or global passive adversary resistance.
 
 ---
 

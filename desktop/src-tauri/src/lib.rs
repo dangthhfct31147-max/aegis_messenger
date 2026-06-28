@@ -84,6 +84,7 @@ pub struct ContactInfo {
     pub id: String,
     pub display_name: String,
     pub safety_number: String,
+    pub pq_status: String,
     pub added_at: String,
 }
 

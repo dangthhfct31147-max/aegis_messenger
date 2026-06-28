@@ -3,7 +3,7 @@
 import { writable, derived } from 'svelte/store';
 
 /**
- * @typedef {{ id: string, display_name: string, safety_number: string, added_at: string }} Contact
+ * @typedef {{ id: string, display_name: string, safety_number: string, pq_status?: string, added_at: string }} Contact
  * @typedef {{ id: string, contact_id: string, direction: string, text: string, created_at: string, envelope_id?: string | null }} ChatMessage
  * @typedef {{ id: string, name: string, member_count: number, created_at: string }} GroupInfo
  */

@@ -258,6 +258,35 @@ impl TransportClient {
         }
         Ok(())
     }
+
+    pub async fn send_cover_traffic(
+        &self,
+        padded_size_bucket: i32,
+    ) -> Result<(), crate::error::TransportError> {
+        #[derive(serde::Serialize)]
+        struct Body {
+            padding: String,
+            padded_size_bucket: i32,
+        }
+        let body = Body {
+            padding: base64_url_encode(&vec![0u8; padded_size_bucket.max(0) as usize]),
+            padded_size_bucket,
+        };
+        let resp = self
+            .client
+            .post(format!("{}/v1/cover", self.server_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| crate::error::TransportError::ConnectionFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(crate::error::TransportError::Server(format!(
+                "status: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
 }
 
 fn base64_url_encode(data: &[u8]) -> String {

@@ -20,20 +20,25 @@ async fn main() {
 
     tracing::info!(%addr, "Aegis relay server starting");
 
+    let ttl_seconds = std::env::var("AEGIS_RELAY_TTL_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(86_400);
     let relay_mode = match std::env::var("AEGIS_RELAY_MODE").as_deref() {
-        Ok("ttl_persistent") => aegis_server::state::RelayMode::TtlPersistent {
-            ttl_seconds: std::env::var("AEGIS_RELAY_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(3_600),
-        },
-        _ => aegis_server::state::RelayMode::StrictEphemeral,
+        Ok("strict_ephemeral") => aegis_server::state::RelayMode::StrictEphemeral,
+        _ => aegis_server::state::RelayMode::TtlPersistent { ttl_seconds },
     };
 
-    let app = if let Ok(path) = std::env::var("AEGIS_RELAY_STORE_PATH") {
-        aegis_server::routes::build_router_with_persistence(relay_mode, path.into())
-    } else {
-        aegis_server::routes::build_router(relay_mode)
+    let app = match relay_mode {
+        aegis_server::state::RelayMode::StrictEphemeral => {
+            aegis_server::routes::build_router(relay_mode)
+        }
+        aegis_server::state::RelayMode::TtlPersistent { .. } => {
+            let path = std::env::var("AEGIS_RELAY_STORE_PATH")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("aegis-relay-store.json"));
+            aegis_server::routes::build_router_with_persistence(relay_mode, path)
+        }
     };
 
     let listener = tokio::net::TcpListener::bind(addr)

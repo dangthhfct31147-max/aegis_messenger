@@ -141,7 +141,7 @@
     error = '';
     loading = true;
     try {
-      const contact = /** @type {{ id: string, display_name: string, safety_number: string, added_at: string }} */ (
+      const contact = /** @type {{ id: string, display_name: string, safety_number: string, pq_status?: string, added_at: string }} */ (
         await importContact(importInviteText, importDisplayName || null)
       );
       contacts.update((items) => [...items, contact]);
@@ -349,7 +349,9 @@
                 <div class="contact-avatar">{contact.display_name[0]?.toUpperCase() || '?'}</div>
                 <div class="contact-info">
                   <div class="contact-name">{contact.display_name}</div>
-                  <div class="contact-preview truncate">End-to-end encrypted</div>
+                  <div class="contact-preview truncate">
+                    {contact.pq_status === 'ml-kem-768-verified' ? 'E2EE + ML-KEM verified' : 'E2EE'}
+                  </div>
                 </div>
               </button>
             {/each}
@@ -393,7 +395,7 @@
             <header class="chat-header">
               <div>
                 <h2>{selectedContact.display_name}</h2>
-                <p>Safety {selectedContact.safety_number}</p>
+                <p>Safety {selectedContact.safety_number} · {selectedContact.pq_status || 'E2EE'}</p>
               </div>
               <div class="chat-actions">
                 <button class="btn-ghost" on:click={handleVerifyContact}>Verify</button>

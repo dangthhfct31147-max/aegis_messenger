@@ -61,6 +61,8 @@ pub struct ContactRecord {
     pub shared_secret: SymmetricKey,
     pub safety_number: String,
     pub verified_at: Option<i64>,
+    #[serde(default)]
+    pub pq_verified: bool,
     pub created_at: i64,
 }
 
@@ -122,6 +124,12 @@ struct WireMessage {
     id: String,
     sender_identity_public: String,
     ciphertext: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PaddedWireMessage {
+    payload: WireMessage,
+    padding: String,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -211,6 +219,7 @@ impl AppVault {
                 id: contact.id,
                 display_name: contact.display_name,
                 safety_number: contact.safety_number,
+                pq_status: pq_status(contact.pq_verified),
                 added_at: chrono::DateTime::from_timestamp(contact.created_at, 0)
                     .unwrap_or_else(chrono::Utc::now)
                     .to_rfc3339(),
@@ -328,6 +337,11 @@ impl AppVault {
             .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
         let signed_prekey_public = X25519PublicKey::from_base64(&invite.signed_prekey_public)
             .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+        let pq_prekey_public = base64_url_decode(&invite.pq_prekey_public)
+            .map_err(|_| aegis_vault::VaultError::Record("invalid ML-KEM prekey".into()))?;
+        MlKem768Provider
+            .encapsulate(&pq_prekey_public)
+            .map_err(|e| aegis_vault::VaultError::Record(format!("invalid ML-KEM prekey: {e}")))?;
         let shared_secret =
             derive_contact_secret(&profile.identity_private, &remote_identity_public)
                 .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
@@ -344,10 +358,11 @@ impl AppVault {
             remote_identity_public,
             remote_signing_public,
             signed_prekey_public,
-            pq_prekey_public: base64_url_decode(&invite.pq_prekey_public).ok(),
+            pq_prekey_public: Some(pq_prekey_public),
             shared_secret,
             safety_number: safety_number.clone(),
             verified_at: None,
+            pq_verified: true,
             created_at: chrono::Utc::now().timestamp(),
         };
         let mut contacts = self.load_contacts()?;
@@ -357,6 +372,7 @@ impl AppVault {
             id: contact.id,
             display_name: contact.display_name,
             safety_number,
+            pq_status: pq_status(contact.pq_verified),
             added_at: chrono::Utc::now().to_rfc3339(),
         })
     }
@@ -393,8 +409,7 @@ impl AppVault {
             sender_identity_public: profile.identity_public.to_base64(),
             ciphertext: base64_url_encode(&ciphertext),
         };
-        let wire_bytes = serde_json::to_vec(&wire)
-            .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+        let wire_bytes = encode_padded_wire(wire)?;
         let message = MessageRecord {
             id,
             contact_id: contact.id.clone(),
@@ -421,8 +436,7 @@ impl AppVault {
         wire_bytes: &[u8],
         envelope_id: Option<String>,
     ) -> Result<Option<ChatMessage>, aegis_vault::VaultError> {
-        let wire: WireMessage = serde_json::from_slice(wire_bytes)
-            .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?;
+        let wire = decode_padded_wire(wire_bytes)?;
         let ciphertext = base64_url_decode(&wire.ciphertext)
             .map_err(|_| aegis_vault::VaultError::Record("invalid wire ciphertext".into()))?;
         let contacts = self.load_contacts()?;
@@ -467,6 +481,7 @@ impl AppVault {
             id: contact.id.clone(),
             display_name: contact.display_name.clone(),
             safety_number: contact.safety_number.clone(),
+            pq_status: pq_status(contact.pq_verified),
             added_at: chrono::Utc::now().to_rfc3339(),
         };
         self.save_contacts(&contacts)?;
@@ -684,6 +699,32 @@ fn derive_contact_secret(
     Ok(SymmetricKey(key))
 }
 
+fn encode_padded_wire(wire: WireMessage) -> Result<Vec<u8>, aegis_vault::VaultError> {
+    let payload_len = serde_json::to_vec(&wire)
+        .map_err(|e| aegis_vault::VaultError::Record(e.to_string()))?
+        .len();
+    let target = if payload_len <= 1024 {
+        1024
+    } else if payload_len <= 4096 {
+        4096
+    } else {
+        payload_len.next_power_of_two().min(65_536)
+    };
+    let padding_len = target.saturating_sub(payload_len).min(16_384);
+    let padded = PaddedWireMessage {
+        payload: wire,
+        padding: base64_url_encode(&aegis_crypto::random::random_vec(padding_len)),
+    };
+    serde_json::to_vec(&padded).map_err(|e| aegis_vault::VaultError::Record(e.to_string()))
+}
+
+fn decode_padded_wire(wire_bytes: &[u8]) -> Result<WireMessage, aegis_vault::VaultError> {
+    if let Ok(padded) = serde_json::from_slice::<PaddedWireMessage>(wire_bytes) {
+        return Ok(padded.payload);
+    }
+    serde_json::from_slice(wire_bytes).map_err(|e| aegis_vault::VaultError::Record(e.to_string()))
+}
+
 fn to_chat_message(message: MessageRecord) -> ChatMessage {
     ChatMessage {
         id: message.id,
@@ -720,6 +761,14 @@ fn safety_number(a: &[u8; 32], b: &[u8; 32]) -> String {
         (n / 10_000_000_000) % 100000,
         (n / 1_000_000_000_000_000) % 100000
     )
+}
+
+fn pq_status(verified: bool) -> String {
+    if verified {
+        "ml-kem-768-verified".into()
+    } else {
+        "missing-or-unverified".into()
+    }
 }
 
 fn fingerprint(data: &[u8; 32]) -> String {

@@ -129,10 +129,11 @@ AEGIS_BIND=0.0.0.0:8080 ./target/release/aegis-server
 - Minimal server API client
 - Account/queue/envelope management
 - Optional proxy routing for Tor SOCKS or I2P HTTP proxy mode
+- Cover-traffic endpoint support for padded dummy traffic
 - Constant-time token comparison
 
 ### aegis-server
-- In-memory strict mode plus TTL persistent JSON store when `AEGIS_RELAY_STORE_PATH` is set
+- TTL persistent JSON store by default; strict in-memory mode is available with `AEGIS_RELAY_MODE=strict_ephemeral`
 - Ephemeral relay: queues/envelopes auto-expire
 - Token capability system (read/write separation)
 - Rate limiting ready
@@ -195,11 +196,10 @@ cargo fmt --all
 
 This is an MVP. Known limitations:
 - Group messaging is available only as per-recipient E2EE fanout; no RFC 9420 MLS ratchet tree yet
-- Offline delivery is available only when the relay runs in `ttl_persistent` mode with `AEGIS_RELAY_STORE_PATH`
-- No multi-device key sync
+- Multi-device uses per-device public registration foundations, but encrypted device-link/key-transfer UX is not complete
 - No perfect forward secrecy for the relay server itself
-- ML-KEM-768 is integrated but still requires production review and downgrade UX
-- Tor/I2P proxy routing is available, but traffic-correlation protection is not complete
+- ML-KEM-768 is integrated and desktop contact import rejects invalid PQ prekeys, but production review is still required
+- Tor/I2P proxy routing, envelope padding, and cover traffic are available, but global traffic-correlation protection is not complete
 
 See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for full list.
 
